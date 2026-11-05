@@ -153,7 +153,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v3</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v4</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -395,13 +395,16 @@ function analyze(S,opts={}){
   const a={rr:rp.f*60,snrDb:rp.snrDb};
   const b=h?respFromIBI(times,ok):null;
   let rr=a;
+  const agree=!!b&&Math.abs(a.rr-b.rr)<=3;
   if(b){
-    if(Math.abs(a.rr-b.rr)<=3)rr={rr:(a.rr+b.rr)/2,snrDb:Math.max(a.snrDb,b.snrDb)+1.5};
+    if(agree)rr={rr:(a.rr+b.rr)/2,snrDb:Math.max(a.snrDb,b.snrDb)+1.5};
     else rr=b.snrDb>a.snrDb?b:a;
   }
   out.rr=rr.rr;out.rrSnr=rr.snrDb;
-  // respiration confidence can never exceed the cardiac signal quality it was extracted from
-  out.rrQuality=Math.min(Math.round(clamp((rr.snrDb-1)/8,0,1)*100),out.quality);
+  // respiration is the weakest camera signal: it can never beat the pulse quality, and
+  // without two independent methods agreeing it is capped below the display threshold
+  const rrBase=Math.min(Math.round(clamp((rr.snrDb-1)/8,0,1)*100),out.quality);
+  out.rrQuality=agree?rrBase:Math.min(rrBase,35);
   return out;
 }
 // ==DSP-END==
@@ -427,7 +430,7 @@ try{
 if('serviceWorker' in navigator&&location.protocol.startsWith('http')){navigator.serviceWorker.register('sw.js').catch(()=>{})}
 
 /* ───────────── state ───────────── */
-const WARM=3,SCAN_S=30;
+const WARM=3,SCAN_S=30,SCAN_MAX=60;
 const MP_VER='0.10.14';
 const MP_BASE='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@'+MP_VER;
 const MP_MODEL='https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
@@ -471,13 +474,17 @@ function updateFace(res,now,vw,vh){
     const k=.2*fw;
     const rois=[fh,{cx:c1.x,cy:c1.y,w:k,h:k},{cx:c2.x,cy:c2.y,w:k,h:k}];
     const cx=(a.x+b.x)/2,cy=(a.y+b.y)/2;
-    if(F.present&&F.fw&&F.seen){
-      const dt=Math.max((now-F.seen)/1000,.02);
-      const sp=Math.hypot(cx-F.cx,cy-F.cy)/F.fw/dt;
-      F.speed=F.speed*.7+sp*.3;
+    // "sway": largest excursion from the mean face position over the last 1.5 s, in face widths.
+    // (Frame-to-frame speed was dominated by landmark jitter and never read as "still".)
+    (F.hist=F.hist||[]).push({t:now,x:cx,y:cy});
+    while(F.hist.length&&now-F.hist[0].t>1500)F.hist.shift();
+    if(F.hist.length>=5){
+      const mx=mean(F.hist.map(p=>p.x)),my=mean(F.hist.map(p=>p.y));
+      let d=0;for(const p of F.hist)d=Math.max(d,Math.hypot(p.x-mx,p.y-my));
+      F.speed=d/fw;
     }
     F.rois=rois;F.fw=fw;F.cx=cx;F.cy=cy;F.present=true;F.seen=now;F.fallback=false;
-  }else if(now-F.seen>700){F.present=false;F.rois=[];F.speed=0}
+  }else if(now-F.seen>700){F.present=false;F.rois=[];F.speed=0;F.hist=[]}
 }
 function fallbackFace(now,vw,vh){
   const F=S.face,fw=.55*Math.min(vw,vh*.75),cx=vw/2,cy=vh*.46;
@@ -581,7 +588,7 @@ function sampleFrame(now,vw,vh){
       if(D.t.length){const dt=(now-S.lastT)/1000;if(dt>.2)S.gaps+=dt-.2}
       D.t.push(now);D.r.push(R);D.g.push(G);D.b.push(B);S.lastT=now;
       per.forEach((v,i)=>{D.rois[i].r.push(v[0]);D.rois[i].g.push(v[1]);D.rois[i].b.push(v[2])});
-      S.mtot++;if(F.speed>.3)S.mbad++;
+      S.mtot++;if(F.speed>=.08)S.mbad++;
       if(now-S.lastLive>1000&&D.t.length>FS*12){
         S.lastLive=now;
         const cut=now-18000;let k=0;while(k<D.t.length&&D.t[k]<cut)k++;
@@ -590,7 +597,8 @@ function sampleFrame(now,vw,vh){
         if(a){S.liveQ=a.quality;S.liveHr=a.hr;S.liveCons=a.cons}
       }
     }
-    if(el>=WARM+SCAN_S)finishScan();
+    // after 30 s, keep going (up to 60 s) until the live signal is strong: more data averages out the noise
+    if(el>=WARM+SCAN_S&&((S.liveQ!=null&&S.liveQ>=60)||el>=WARM+SCAN_MAX))finishScan();
   }
 }
 
@@ -623,7 +631,7 @@ function chipState(){
   const F=S.face,c={};
   c.face=F.fallback?['warn','Manual']:F.present?['ok','Found']:['bad','Not found'];
   c.light=S.bri<55?['bad','Too dark']:S.bri<80?['warn','Dim']:(S.bri>225||S.sat>.15)?['bad','Too bright']:['ok','Good'];
-  c.steady=F.fallback?['warn','—']:F.speed>.3?['bad','Moving']:F.speed>.15?['warn','Slight']:['ok','Still'];
+  c.steady=F.fallback?['warn','n/a']:F.speed>=.08?['bad','Moving']:F.speed>=.04?['warn','Slight']:['ok','Still'];
   if(S.liveQ==null)c.signal=['','Measuring'];
   else c.signal=S.liveQ>=60?['ok','Strong']:S.liveQ>=35?['warn','Fair']:['bad','Weak'];
   const arr=[c.face[0],c.light[0],c.steady[0]];
@@ -645,10 +653,10 @@ function updateUi(now){
     const el=(now-S.tStart)/1000;
     if(el<WARM){$('#phase').textContent='Settling camera…';$('#clock').textContent='';$('#prog').style.width='0%'}
     else{
-      const m=el-WARM;
-      $('#phase').textContent='Measuring';
-      $('#clock').textContent=Math.max(0,Math.ceil(SCAN_S-m))+' s';
-      $('#prog').style.width=clamp(m/SCAN_S*100,0,100)+'%';
+      const m=el-WARM,ext=m>SCAN_S;
+      $('#phase').textContent=ext?'Signal still weak: measuring a bit longer':'Measuring';
+      $('#clock').textContent=Math.max(0,Math.ceil((ext?SCAN_MAX:SCAN_S)-m))+' s';
+      $('#prog').style.width=clamp(ext?(m-SCAN_S)/(SCAN_MAX-SCAN_S)*100:m/SCAN_S*100,0,100)+'%';
     }
     const D=S.data,recent=D.t.filter(t=>now-t<3000).length;
     $('#dbg').textContent=(recent/3).toFixed(0)+' fps · '+(S.liveQ==null?'quality …':'quality '+S.liveQ+' · stability '+Math.round((S.liveCons||0)*100)+'%');
@@ -692,7 +700,7 @@ function finishScan(){
   const D=S.data,a=analyze(D);
   // HRV is the most motion-sensitive number: don't show it if the face moved for >10% of the scan
   if(a&&S.mtot&&S.mbad/S.mtot>.1)a.hrvReliable=false;
-  const total=SCAN_S,coverage=a?clamp(1-S.gaps/total,0,1):0;
+  const total=Math.max(SCAN_S,D.t.length?(S.lastT-D.t[0])/1000:SCAN_S),coverage=a?clamp(1-S.gaps/total,0,1):0;
   closeCamera();
   S.result={a,coverage,at:Date.now()};
   show('result');   // show first: the waveform canvas needs a real size to draw
@@ -703,7 +711,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden&&S.scanning
 /* ───────────── results ───────────── */
 const pillFor=q=>q>=60?['ok','High confidence']:q>=35?['warn','Medium confidence']:['bad','Low confidence'];
 function drawWave(canvas,arr,peaks,fs){
-  const dpr=window.devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;
+  const dpr=window.devicePixelRatio||1,w=canvas.clientWidth||360,h=canvas.clientHeight||70;
   canvas.width=w*dpr;canvas.height=h*dpr;
   const x=canvas.getContext('2d');x.scale(dpr,dpr);
   const n=Math.min(arr.length,fs*10),off=arr.length-n;
@@ -740,6 +748,9 @@ function renderResult(){
       <div class="s">${sl}</div><span class="pill warn">Indicative</span></div>
       <div class="stat wide"><div class="k">Autonomic balance</div><div class="gauge"><i style="left:calc(${a.stress}% - 2px)"></i></div>
       <div class="s" style="display:flex;justify-content:space-between"><span>Relaxed</span><span>Elevated</span></div></div>`;
+  }else if(a.hrv&&Math.abs(a.hrFromPeaks-a.hr)<5&&a.quality>=50){
+    hrvCard=`<div class="stat wide"><div class="k">HRV · RMSSD (rough)</div><div class="v">${Math.round(a.hrv.rmssd)}<small>ms</small></div>
+      <div class="s">Camera noise tends to make this read high. Use it to compare your own scans, not as an absolute value.</div><span class="pill warn">Rough</span></div>`;
   }else{
     hrvCard=`<div class="stat wide"><div class="k">HRV &amp; stress</div><div class="s" style="margin-top:6px">Beat timing wasn't clean enough for a trustworthy HRV. Retry with steadier, brighter conditions.</div></div>`;
   }
