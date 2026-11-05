@@ -104,7 +104,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
         <li>Face a window or lamp. Even, bright light on your face; no backlight.</li>
         <li>Sit still for about 30 seconds. Don't talk.</li>
         <li>Remove glasses/cap if they cover the forehead or cheeks.</li>
-        <li>Rest your phone on something steady.</li>
+        <li><b>Prop the phone</b> on a stand or table at about arm's length. Holding it in your hand adds motion that swamps the pulse.</li>
       </ul>
     </div>
     <button class="btn" id="startBtn">Start scan</button>
@@ -313,6 +313,24 @@ function respFromIBI(times,ok){
   const pk=peakInfo(spectrum(f,4,0.1,0.5,0.005),T,0.5);
   return {rr:pk.f*60,snrDb:pk.snrDb};
 }
+// clip motion bursts so they can't dominate the spectrum (robust 3-sigma on the median/MAD scale)
+function clipOutliers(x,k){
+  const med=median(x),sd=1.4826*median(Array.from(x,v=>Math.abs(v-med)));
+  if(!(sd>0))return x;
+  const y=new Float64Array(x.length),lim=k*sd;
+  for(let i=0;i<x.length;i++)y[i]=clamp(x[i]-med,-lim,lim);
+  return y;
+}
+// HR from sliding 12 s windows: survives a noisy stretch by trusting the cleanest windows that agree
+function windowedHR(x,fs){
+  const W=Math.round(12*fs),hop=Math.round(2*fs),res=[];
+  for(let s=0;s+W<=x.length;s+=hop)res.push(peakInfo(spectrum(x.slice(s,s+W),fs,0.7,3.5,0.01),W/fs,3.5));
+  if(res.length<2)return null;
+  res.sort((a,b)=>b.snrDb-a.snrDb);
+  const good=res.filter(r=>r.snrDb>=res[0].snrDb-3),f0=median(good.map(r=>r.f));
+  const agree=good.filter(r=>Math.abs(r.f-f0)<0.1);
+  return {f:median(agree.map(r=>r.f)),snrDb:mean(agree.map(r=>r.snrDb))-(agree.length<2?2:0)};
+}
 // S: {t:[ms], r:[], g:[], b:[]} ROI means per frame
 function analyze(S,opts={}){
   const n=S.t.length;
@@ -320,9 +338,10 @@ function analyze(S,opts={}){
   const dur=(S.t[n-1]-S.t[0])/1000;
   if(dur<6)return null;
   const R=resample(S.t,S.r,FS),G=resample(S.t,S.g,FS),B=resample(S.t,S.b,FS);
-  const pulse=bandpass(detrend(pos(R,G,B,FS)),FS,0.7,3.5);
+  const pulse=bandpass(detrend(clipOutliers(pos(R,G,B,FS),3)),FS,0.7,3.5);
   const T=R.length/FS;
-  const pk=peakInfo(spectrum(pulse,FS,0.7,3.5,0.01),T,3.5);
+  let pk=peakInfo(spectrum(pulse,FS,0.7,3.5,0.01),T,3.5);
+  if(pk.snrDb<3){const w=windowedHR(pulse,FS);if(w&&w.snrDb>pk.snrDb)pk=w}
   const hr=pk.f*60;
   const out={hr,snrDb:pk.snrDb,quality:Math.round(clamp((pk.snrDb+3)/11,0,1)*100),dur,pulse,fs:FS};
   if(opts.fast)return out;
@@ -337,7 +356,7 @@ function analyze(S,opts={}){
     out.hrv=h;
     out.hrFromPeaks=60000/h.meanIbi;
     const okFrac=ok.filter(Boolean).length/Math.max(ok.length,1);
-    out.hrvReliable=Math.abs(out.hrFromPeaks-hr)<5&&out.quality>=50&&okFrac>=.8;
+    out.hrvReliable=Math.abs(out.hrFromPeaks-hr)<5&&out.quality>=70&&okFrac>=.9;
     out.stress=Math.round(clamp(100*(1-(Math.log(h.rmssd)-Math.log(15))/(Math.log(90)-Math.log(15))),0,100));
   }
 
@@ -388,7 +407,7 @@ const MP_MODEL='https://storage.googleapis.com/mediapipe-models/face_landmarker/
 const video=$('#video'),overlay=$('#overlay'),work=$('#work'),wctx=work.getContext('2d',{willReadFrequently:true}),octx=overlay.getContext('2d');
 const S={running:false,scanning:false,stream:null,landmarker:null,mpState:'idle',frame:0,lastVT:-1,
   face:{present:false,rois:[],fw:0,cx:0,cy:0,speed:0,seen:0,fallback:false},
-  bri:128,sat:0,tStart:0,data:{t:[],r:[],g:[],b:[]},gaps:0,lastT:0,
+  bri:128,sat:0,tStart:0,data:{t:[],r:[],g:[],b:[]},gaps:0,mbad:0,mtot:0,lastT:0,
   hp:{ema:null,ring:[]},liveSnr:null,liveHr:null,lastLive:0,lastUi:0,result:null};
 
 function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id===id));window.scrollTo(0,0)}
@@ -419,8 +438,8 @@ function updateFace(res,now,vw,vh){
     const l=res.faceLandmarks[0];
     const a=lm(l,234,vw,vh),b=lm(l,454,vw,vh),top=lm(l,10,vw,vh),mid=lm(l,9,vw,vh),c1=lm(l,50,vw,vh),c2=lm(l,280,vw,vh);
     const fw=Math.hypot(b.x-a.x,b.y-a.y);
-    const fh={cx:(top.x+mid.x)/2,cy:(top.y+mid.y)/2,w:.42*fw,h:.15*fw};
-    const k=.17*fw;
+    const fh={cx:(top.x+mid.x)/2,cy:(top.y+mid.y)/2,w:.5*fw,h:.17*fw};
+    const k=.2*fw;
     const rois=[fh,{cx:c1.x,cy:c1.y,w:k,h:k},{cx:c2.x,cy:c2.y,w:k,h:k}];
     const cx=(a.x+b.x)/2,cy=(a.y+b.y)/2;
     if(F.present&&F.fw&&F.seen){
@@ -433,8 +452,8 @@ function updateFace(res,now,vw,vh){
 }
 function fallbackFace(now,vw,vh){
   const F=S.face,fw=.55*Math.min(vw,vh*.75),cx=vw/2,cy=vh*.46;
-  const k=.17*fw;
-  F.rois=[{cx,cy:cy-.45*fw,w:.42*fw,h:.15*fw},{cx:cx-.28*fw,cy:cy+.12*fw,w:k,h:k},{cx:cx+.28*fw,cy:cy+.12*fw,w:k,h:k}];
+  const k=.2*fw;
+  F.rois=[{cx,cy:cy-.45*fw,w:.5*fw,h:.17*fw},{cx:cx-.28*fw,cy:cy+.12*fw,w:k,h:k},{cx:cx+.28*fw,cy:cy+.12*fw,w:k,h:k}];
   F.fw=fw;F.cx=cx;F.cy=cy;F.present=true;F.seen=now;F.fallback=true;F.speed=0;
 }
 
@@ -459,12 +478,12 @@ function schedule(){
   if('requestVideoFrameCallback' in HTMLVideoElement.prototype)video.requestVideoFrameCallback(onFrame);
   else requestAnimationFrame(onFrame);
 }
-function onFrame(now){
+function onFrame(now,meta){
   if(!S.running)return;
   schedule();
   if(video.currentTime===S.lastVT)return;
   S.lastVT=video.currentTime;
-  try{step(now)}catch(e){console.error(e)}
+  try{step((meta&&meta.captureTime)||now)}catch(e){console.error(e)}
 }
 
 function step(now){
@@ -477,19 +496,27 @@ function step(now){
       updateFace(res,now,vw,vh);
     }
   }else if(S.mpState==='fallback'){fallbackFace(now,vw,vh)}
+  smoothRois();
   sampleFrame(now,vw,vh);
   drawOverlay(vw,vh);
   if(now-S.lastUi>250){S.lastUi=now;updateUi(now)}
 }
 
+// landmarks update every 3rd frame; glide the boxes between updates so they don't jump and inject colour steps
+function smoothRois(){
+  const F=S.face;
+  if(!F.rois.length){F.sm=[];return}
+  if(!F.sm||F.sm.length!==F.rois.length){F.sm=F.rois.map(q=>({...q}));return}
+  F.sm.forEach((s,i)=>{const q=F.rois[i];for(const k of ['cx','cy','w','h'])s[k]+=(q[k]-s[k])*.35});
+}
 // mean skin-ish R,G,B over the ROIs
 function sampleFrame(now,vw,vh){
   const F=S.face;
-  if(!F.present||!F.rois.length)return;
+  if(!F.present||!F.sm||!F.sm.length)return;
   const sc=320/vw;work.width=320;work.height=Math.round(vh*sc);
   wctx.drawImage(video,0,0,work.width,work.height);
   let sr=0,sg=0,sb=0,n=0,ar=0,ag=0,ab=0,an=0,sat=0;
-  for(const q of F.rois){
+  for(const q of F.sm){
     const x=Math.max(0,Math.round((q.cx-q.w/2)*sc)),y=Math.max(0,Math.round((q.cy-q.h/2)*sc));
     const w=Math.min(work.width-x,Math.round(q.w*sc)),h=Math.min(work.height-y,Math.round(q.h*sc));
     if(w<2||h<2)continue;
@@ -498,7 +525,7 @@ function sampleFrame(now,vw,vh){
       const r=d[i],g=d[i+1],b=d[i+2];
       ar+=r;ag+=g;ab+=b;an++;
       if(r>250||g>250||b>250)sat++;
-      if(r>40&&r>g&&r>b){sr+=r;sg+=g;sb+=b;n++}
+      if(r>40&&r<245&&r>g&&r>b){sr+=r;sg+=g;sb+=b;n++}
     }
   }
   if(!an)return;
@@ -519,6 +546,7 @@ function sampleFrame(now,vw,vh){
       const D=S.data;
       if(D.t.length){const dt=(now-S.lastT)/1000;if(dt>.2)S.gaps+=dt-.2}
       D.t.push(now);D.r.push(R);D.g.push(G);D.b.push(B);S.lastT=now;
+      S.mtot++;if(F.speed>.3)S.mbad++;
       if(now-S.lastLive>1000&&D.t.length>FS*9){
         S.lastLive=now;
         const cut=now-15000;let k=0;while(k<D.t.length&&D.t[k]<cut)k++;
@@ -542,7 +570,7 @@ function drawOverlay(vw,vh){
   octx.setLineDash([]);
   octx.lineWidth=2*(window.devicePixelRatio||1);
   octx.strokeStyle='rgba(124,240,218,.9)';
-  for(const q of S.face.rois){octx.strokeRect((q.cx-q.w/2)*sx,(q.cy-q.h/2)*sy,q.w*sx,q.h*sy)}
+  for(const q of (S.face.sm||[])){octx.strokeRect((q.cx-q.w/2)*sx,(q.cy-q.h/2)*sy,q.w*sx,q.h*sy)}
   drawLiveWave();
 }
 function drawLiveWave(){
@@ -574,7 +602,7 @@ function updateUi(now){
   if(!S.face.present)hint='Move your face into the oval';
   else if(c.light[1]==='Too dark'||c.light[1]==='Dim')hint='More light on your face: face a window or lamp';
   else if(c.light[1]==='Too bright')hint='Too bright: avoid direct glare or sun on your face';
-  else if(c.steady[0]==='bad')hint='Hold still';
+  else if(c.steady[0]==='bad')hint='Hold still. Prop the phone on a surface if you can.';
   $('#hint').textContent=hint;
   $('#goBtn').disabled=S.scanning||!S.face.present||S.mpState==='loading';
   if(S.scanning){
@@ -616,7 +644,7 @@ function resetScan(){
 }
 function beginScan(){
   if(!S.face.present)return;
-  S.data={t:[],r:[],g:[],b:[]};S.gaps=0;S.liveSnr=null;S.liveHr=null;S.lastLive=0;
+  S.data={t:[],r:[],g:[],b:[]};S.gaps=0;S.mbad=0;S.mtot=0;S.liveSnr=null;S.liveHr=null;S.lastLive=0;
   S.tStart=performance.now();S.scanning=true;
   $('#goBtn').disabled=true;$('#goBtn').textContent='Scanning…';
 }
@@ -624,6 +652,8 @@ function cancelScan(){closeCamera();S.scanning=false;show('home');renderHistory(
 function finishScan(){
   S.scanning=false;
   const D=S.data,a=analyze(D);
+  // HRV is the most motion-sensitive number: don't show it if the face moved for >10% of the scan
+  if(a&&S.mtot&&S.mbad/S.mtot>.1)a.hrvReliable=false;
   const total=SCAN_S,coverage=a?clamp(1-S.gaps/total,0,1):0;
   closeCamera();
   S.result={a,coverage,at:Date.now()};
@@ -653,7 +683,7 @@ function stressLabel(s){return s<33?'Relaxed':s<66?'Balanced':'Elevated'}
 function renderResult(){
   const {a,coverage}=S.result,el=$('#resBody');
   const tooFew=!a||coverage<.7;
-  if(tooFew||a.quality<20){
+  if(tooFew||a.quality<12){
     el.innerHTML=`<div class="card"><h2>Couldn't get a clean reading</h2>
       <p style="margin:0 0 8px;font-size:14px">${tooFew?'The face was lost or the scan was interrupted for too long.':'The pulse signal was too weak or noisy.'}</p>
       <ul class="plain"><li>Use brighter, even light on your face</li><li>Stay still and don't talk</li><li>Keep forehead and cheeks uncovered</li><li>Steady the phone on a surface</li></ul></div>`;
@@ -676,7 +706,8 @@ function renderResult(){
   }
   el.innerHTML=`<div class="grid">
     <div class="stat"><div class="k">Heart rate</div><div class="v">${Math.round(a.hr)}<small>bpm</small></div>
-      <div class="s">Typical resting adult: 60–100</div><span class="pill ${hp[0]}">${hp[1]}</span></div>
+      <div class="s">Typical resting adult: 60–100</div><span class="pill ${hp[0]}">${hp[1]}</span>
+      ${a.quality<35?'<div class="s" style="color:var(--warn);margin-top:6px">Rough estimate. Rescan with the phone propped steady.</div>':''}</div>
     <div class="stat"><div class="k">Respiration</div><div class="v">${rrOk?Math.round(a.rr):'--'}<small>/min</small></div>
       <div class="s">Typical resting adult: 12–20</div><span class="pill ${rrOk?rp[0]:'bad'}">${rrOk?rp[1]:'Not reliable'}</span></div>
     ${hrvCard}
