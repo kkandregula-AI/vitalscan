@@ -102,7 +102,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
       <h2>For a good scan</h2>
       <ul class="plain">
         <li>Face a window or lamp. Even, bright light on your face; no backlight.</li>
-        <li>Sit still for about 30 seconds. Don't talk.</li>
+        <li>It starts by itself once you're ready. Stay still and quiet for about 30 seconds.</li>
         <li>Remove glasses/cap if they cover the forehead or cheeks.</li>
         <li><b>Prop the phone</b> on a stand or table at about arm's length. Holding it in your hand adds motion that swamps the pulse.</li>
       </ul>
@@ -153,7 +153,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v4</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v5</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -648,6 +648,15 @@ function updateUi(now){
   else if(c.light[1]==='Too bright')hint='Too bright: avoid direct glare or sun on your face';
   else if(c.steady[0]==='bad')hint='Hold still. Prop the phone on a surface if you can.';
   $('#hint').textContent=hint;
+  // hands-free start: begin on its own once face, light and stillness have been OK for 1.5 s
+  if(S.running&&!S.scanning){
+    if(S.face.present&&c.all!=='bad'&&S.mpState!=='loading'){
+      S.okSince=S.okSince||now;
+      const left=1.5-(now-S.okSince)/1000;
+      if(left<=0){S.okSince=0;beginScan()}
+      else $('#hint').textContent='Good. Hold still: starting in '+Math.ceil(left)+'…';
+    }else S.okSince=0;
+  }
   $('#goBtn').disabled=S.scanning||!S.face.present||S.mpState==='loading';
   if(S.scanning){
     const el=(now-S.tStart)/1000;
@@ -682,7 +691,7 @@ async function startFlow(){
   }
 }
 function resetScan(){
-  S.scanning=false;S.data=newData();S.gaps=0;S.liveQ=null;S.liveCons=null;S.liveHr=null;S.lastLive=0;
+  S.scanning=false;S.okSince=0;S.data=newData();S.gaps=0;S.liveQ=null;S.liveCons=null;S.liveHr=null;S.lastLive=0;
   S.hp={ema:null,ring:[]};
   $('#prog').style.width='0%';$('#phase').textContent='Ready';$('#clock').textContent='';
   $('#liveHr').innerHTML='--<small>bpm</small>';$('#liveNote').textContent='waiting…';
@@ -730,10 +739,12 @@ function renderResult(){
   const {a,coverage}=S.result,el=$('#resBody');
   const tooFew=!a||coverage<.7;
   if(tooFew||a.quality<35){
-    el.innerHTML=`<div class="card"><h2>Couldn't get a clean reading</h2>
-      <p style="margin:0 0 8px;font-size:14px">${tooFew?'The face was lost or the scan was interrupted for too long.':'The pulse signal was too weak or noisy.'}</p>
-      <ul class="plain"><li>Use brighter, even light on your face</li><li>Stay still and don't talk</li><li>Keep forehead and cheeks uncovered</li><li>Steady the phone on a surface</li></ul>
-      ${a?`<p class="note" style="margin:10px 0 0">Best guess (not reliable): ${Math.round(a.hr)} bpm · quality ${a.quality} · stability ${Math.round(a.cons*100)}% · regions ${a.roiQ.join('/')} · coverage ${Math.round(coverage*100)}%</p>`:''}</div>`;
+    el.innerHTML=`<div class="card"><h2>${tooFew?'Scan interrupted':'Weak reading'}</h2>
+      ${tooFew
+        ?`<p style="margin:0;font-size:15px">I lost your face for too long. Keep it inside the oval and try again.</p>`
+        :`<div class="big" style="margin:4px 0 8px">${Math.round(a.hr)}<small>bpm · rough guess only</small></div>
+          <p style="margin:0;font-size:15px">The pulse was too faint to trust. Prop the phone up, put a lamp or window in front of you, and try once more. It starts by itself.</p>`}
+      ${a?`<p class="note" style="margin:12px 0 0">quality ${a.quality} · stability ${Math.round(a.cons*100)}% · regions ${a.roiQ.join('/')} · coverage ${Math.round(coverage*100)}%</p>`:''}</div>`;
     S.result.summary=null;$('#shareBtn').style.display='none';return;
   }
   $('#shareBtn').style.display='';
