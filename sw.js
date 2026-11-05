@@ -1,5 +1,5 @@
 // NĀḌĪ service worker: offline shell + runtime cache for MediaPipe assets
-const C = 'nadi-v1';
+const C = 'nadi-v3';
 const HOSTS = ['cdn.jsdelivr.net', 'storage.googleapis.com'];
 
 self.addEventListener('install', e => {
@@ -15,21 +15,29 @@ self.addEventListener('activate', e => {
   );
 });
 
-// stale-while-revalidate for our own files and the MediaPipe runtime/model
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const u = new URL(e.request.url);
-  if (u.origin !== location.origin && !HOSTS.includes(u.hostname)) return;
-  e.respondWith(
-    caches.match(e.request).then(hit => {
-      const net = fetch(e.request).then(r => {
-        if (r && (r.ok || r.type === 'opaque')) {
-          const copy = r.clone();
-          caches.open(C).then(c => c.put(e.request, copy));
-        }
+  const mine = u.origin === location.origin;
+  if (!mine && !HOSTS.includes(u.hostname)) return;
+
+  // the app itself: network first, so updates show up immediately; cache only when offline
+  const isPage = e.request.mode === 'navigate' || (mine && (u.pathname.endsWith('/') || u.pathname.endsWith('.html')));
+  if (isPage) {
+    e.respondWith(
+      fetch(e.request).then(r => {
+        if (r && r.ok) { const copy = r.clone(); caches.open(C).then(c => c.put(e.request, copy)); }
         return r;
-      }).catch(() => hit);
-      return hit || net;
-    })
+      }).catch(() => caches.match(e.request).then(h => h || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // MediaPipe runtime + model: cache first (large, versioned URLs)
+  e.respondWith(
+    caches.match(e.request).then(hit => hit || fetch(e.request).then(r => {
+      if (r && (r.ok || r.type === 'opaque')) { const copy = r.clone(); caches.open(C).then(c => c.put(e.request, copy)); }
+      return r;
+    }))
   );
 });

@@ -153,7 +153,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v3</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -695,8 +695,8 @@ function finishScan(){
   const total=SCAN_S,coverage=a?clamp(1-S.gaps/total,0,1):0;
   closeCamera();
   S.result={a,coverage,at:Date.now()};
+  show('result');   // show first: the waveform canvas needs a real size to draw
   renderResult();
-  show('result');
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&S.scanning){cancelScan()}});
 
