@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070b10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="NĀḌĪ">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>NĀḌĪ · Face Vitals</title>
+<link rel="apple-touch-icon" id="appleIcon" href="data:,">
+<link rel="manifest" id="manifestLink">
+<style>
+:root{
+  --bg:#070b10;--card:#0f1620;--card2:#131d29;--line:#1d2a3a;
+  --text:#e8f0f7;--muted:#8aa0b4;--accent:#35e0c1;--accent2:#7cf0da;
+  --ok:#35e0c1;--warn:#ffc857;--bad:#ff6b81;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.45}
+body{min-height:100vh;min-height:100dvh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.wrap{max-width:460px;margin:0 auto;padding:18px 16px 28px}
+.screen{display:none}.screen.on{display:block}
+header.brand{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#0f2a33,#071017);border:1px solid var(--line);display:grid;place-items:center}
+.logo svg{width:28px;height:28px}
+h1{font-size:22px;margin:0;letter-spacing:.04em}
+h1 small{display:block;font-size:12px;font-weight:500;color:var(--muted);letter-spacing:.02em;margin-top:1px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 14px;margin-bottom:12px}
+.card h2{font-size:13px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em}
+ul.plain{margin:0;padding-left:18px;color:var(--text);font-size:14px}
+ul.plain li{margin:4px 0}
+.btn{appearance:none;border:0;border-radius:14px;padding:15px 18px;font-size:16px;font-weight:700;width:100%;cursor:pointer;color:#05231d;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+.btn:active{transform:scale(.985)}
+.btn.ghost{background:var(--card2);color:var(--text);border:1px solid var(--line);font-weight:600}
+.btn[disabled]{opacity:.45}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.note{font-size:12px;color:var(--muted)}
+.disc{font-size:12px;color:var(--muted);border-left:3px solid var(--warn);padding:6px 10px;background:rgba(255,200,87,.06);border-radius:6px;margin:12px 0}
+footer{margin-top:18px;text-align:center;font-size:11px;color:#5d7287}
+
+/* camera */
+.cam{position:relative;width:100%;max-width:440px;margin:0 auto 10px;border-radius:18px;overflow:hidden;background:#000;border:1px solid var(--line);aspect-ratio:3/4}
+.cam video,.cam canvas{position:absolute;inset:0;width:100%;height:100%;transform:scaleX(-1)}
+.cam video{object-fit:cover}
+.cam .hud{position:absolute;left:0;right:0;bottom:0;padding:10px 12px;background:linear-gradient(transparent,rgba(0,0,0,.72));display:flex;align-items:flex-end;justify-content:space-between;transform:none}
+.big{font-size:38px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.big small{font-size:13px;font-weight:600;color:var(--muted);margin-left:4px}
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0}
+.chip{font-size:11px;text-align:center;padding:7px 2px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--muted)}
+.chip b{display:block;font-size:12px;color:var(--text);font-weight:700}
+.chip.ok{border-color:rgba(53,224,193,.5)}.chip.ok b{color:var(--ok)}
+.chip.warn{border-color:rgba(255,200,87,.5)}.chip.warn b{color:var(--warn)}
+.chip.bad{border-color:rgba(255,107,129,.5)}.chip.bad b{color:var(--bad)}
+.hint{min-height:22px;text-align:center;font-size:14px;margin:4px 0 10px}
+.bar{height:8px;background:var(--card2);border-radius:99px;overflow:hidden;margin:8px 0 6px}
+.bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .3s}
+canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-radius:12px;border:1px solid var(--line)}
+.timer{display:flex;justify-content:space-between;font-size:13px;color:var(--muted)}
+
+/* results */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px}
+.stat .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+.stat .v{font-size:34px;font-weight:800;margin:4px 0 2px;font-variant-numeric:tabular-nums}
+.stat .v small{font-size:12px;color:var(--muted);font-weight:600;margin-left:3px}
+.stat .s{font-size:12px;color:var(--muted)}
+.pill{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;margin-top:6px;text-transform:uppercase;letter-spacing:.06em}
+.pill.ok{background:rgba(53,224,193,.15);color:var(--ok)}
+.pill.warn{background:rgba(255,200,87,.15);color:var(--warn)}
+.pill.bad{background:rgba(255,107,129,.15);color:var(--bad)}
+.wide{grid-column:1/-1}
+.gauge{height:10px;border-radius:99px;background:linear-gradient(90deg,#35e0c1,#ffc857,#ff6b81);position:relative;margin:10px 0 6px}
+.gauge i{position:absolute;top:-4px;width:4px;height:18px;border-radius:3px;background:#fff;box-shadow:0 0 0 2px rgba(0,0,0,.5)}
+.hist{display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+.hist:last-child{border:0}.hist span:first-child{color:var(--muted)}
+.err{color:var(--bad);font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="brand">
+    <div class="logo"><svg viewBox="0 0 28 28" fill="none" stroke="#35e0c1" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 15h6l3-7 4 13 3-9 2 3h6"/></svg></div>
+    <h1>NĀḌĪ<small>Face vitals · camera-based wellness scan</small></h1>
+  </header>
+
+  <!-- HOME -->
+  <section id="home" class="screen on">
+    <div class="card">
+      <h2>What it estimates</h2>
+      <ul class="plain">
+        <li>Heart rate</li>
+        <li>Respiratory rate</li>
+        <li>Heart rate variability (RMSSD, SDNN)</li>
+        <li>Stress index (indicative)</li>
+        <li>Signal quality, so you know how far to trust it</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>For a good scan</h2>
+      <ul class="plain">
+        <li>Face a window or lamp. Even, bright light on your face; no backlight.</li>
+        <li>Sit still for about 30 seconds. Don't talk.</li>
+        <li>Remove glasses/cap if they cover the forehead or cheeks.</li>
+        <li>Rest your phone on something steady.</li>
+      </ul>
+    </div>
+    <button class="btn" id="startBtn">Start scan</button>
+    <p class="disc">Wellness estimate only. Not a medical device and not for diagnosis. Video is processed on your phone and is never uploaded or stored.</p>
+    <div class="card" id="histCard" style="display:none">
+      <h2>Recent scans</h2>
+      <div id="histList"></div>
+      <button class="btn ghost" id="clearHist" style="margin-top:10px;padding:10px;font-size:13px">Clear history</button>
+    </div>
+  </section>
+
+  <!-- SCAN -->
+  <section id="scan" class="screen">
+    <div class="cam" id="cam">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="overlay"></canvas>
+      <div class="hud">
+        <div><div class="big" id="liveHr">--<small>bpm</small></div><div class="note" id="liveNote">waiting…</div></div>
+        <div class="note" id="modeNote"></div>
+      </div>
+    </div>
+    <div class="chips">
+      <div class="chip" id="cFace">Face<b>—</b></div>
+      <div class="chip" id="cLight">Light<b>—</b></div>
+      <div class="chip" id="cSteady">Steady<b>—</b></div>
+      <div class="chip" id="cSignal">Signal<b>—</b></div>
+    </div>
+    <div class="hint" id="hint">Starting camera…</div>
+    <canvas class="wave" id="liveWave" width="400" height="70"></canvas>
+    <div class="bar"><i id="prog"></i></div>
+    <div class="timer"><span id="phase">Ready</span><span id="clock"></span></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn ghost" id="cancelBtn">Cancel</button>
+      <button class="btn" id="goBtn" disabled>Begin 30 s scan</button>
+    </div>
+  </section>
+
+  <!-- RESULT -->
+  <section id="result" class="screen">
+    <div id="resBody"></div>
+    <div class="row">
+      <button class="btn ghost" id="shareBtn">Share</button>
+      <button class="btn" id="againBtn">Scan again</button>
+    </div>
+    <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
+  </section>
+
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude</footer>
+</div>
+
+<canvas id="work" style="display:none"></canvas>
+
+<script type="module">
+const $=(s,r=document)=>r.querySelector(s);
+
+// ==DSP-START==
+const FS=30;
+const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
+const mean=a=>{let s=0;for(let i=0;i<a.length;i++)s+=a[i];return a.length?s/a.length:0};
+const stdev=a=>{const m=mean(a);let s=0;for(let i=0;i<a.length;i++){const d=a[i]-m;s+=d*d}return a.length?Math.sqrt(s/a.length):0};
+const median=a=>{if(!a.length)return 0;const b=Array.from(a).sort((x,y)=>x-y);const k=b.length>>1;return b.length%2?b[k]:(b[k-1]+b[k])/2};
+
+// irregular camera timestamps (ms) -> uniform grid at fs
+function resample(ts,v,fs){
+  const t0=ts[0],t1=ts[ts.length-1];
+  const n=Math.floor((t1-t0)/1000*fs)+1;
+  const out=new Float64Array(n);
+  let j=0;
+  for(let i=0;i<n;i++){
+    const t=t0+i*1000/fs;
+    while(j<ts.length-2&&ts[j+1]<t)j++;
+    const a=ts[j],b=ts[j+1];
+    const u=b>a?clamp((t-a)/(b-a),0,1):0;
+    out[i]=v[j]+(v[j+1]-v[j])*u;
+  }
+  return out;
+}
+function detrend(x){
+  const n=x.length;let sx=0,sy=0,sxx=0,sxy=0;
+  for(let i=0;i<n;i++){sx+=i;sy+=x[i];sxx+=i*i;sxy+=i*x[i]}
+  const d=n*sxx-sx*sx;const b=d?(n*sxy-sx*sy)/d:0;const a=(sy-b*sx)/n;
+  const y=new Float64Array(n);for(let i=0;i<n;i++)y[i]=x[i]-(a+b*i);return y;
+}
+function biquad(type,fc,fs){
+  const Q=Math.SQRT1_2,w=2*Math.PI*fc/fs,c=Math.cos(w),s=Math.sin(w),al=s/(2*Q);
+  let b0,b1,b2;
+  if(type==='lp'){b0=(1-c)/2;b1=1-c;b2=(1-c)/2}else{b0=(1+c)/2;b1=-(1+c);b2=(1+c)/2}
+  const a0=1+al;
+  return {b0:b0/a0,b1:b1/a0,b2:b2/a0,a1:-2*c/a0,a2:(1-al)/a0};
+}
+function runBiquad(x,f){
+  const y=new Float64Array(x.length);let x1=0,x2=0,y1=0,y2=0;
+  for(let i=0;i<x.length;i++){
+    const v=f.b0*x[i]+f.b1*x1+f.b2*x2-f.a1*y1-f.a2*y2;
+    y[i]=v;x2=x1;x1=x[i];y2=y1;y1=v;
+  }
+  return y;
+}
+// zero-phase filtering with odd-reflection padding
+function filtfilt(x,filters,pad){
+  const n=x.length,p=Math.min(pad,n-2),e=new Float64Array(n+2*p);
+  for(let i=0;i<p;i++)e[i]=2*x[0]-x[p-i];
+  for(let i=0;i<n;i++)e[p+i]=x[i];
+  for(let i=0;i<p;i++)e[n+p+i]=2*x[n-1]-x[n-2-i];
+  let y=e;
+  for(const f of filters){
+    y=runBiquad(y,f);
+    y=Float64Array.from(y).reverse();
+    y=runBiquad(y,f);
+    y=Float64Array.from(y).reverse();
+  }
+  return y.slice(p,p+n);
+}
+function bandpass(x,fs,lo,hi){
+  return filtfilt(x,[biquad('hp',lo,fs),biquad('lp',hi,fs)],Math.round(3*fs));
+}
+// Plane-Orthogonal-to-Skin (POS) chrominance pulse extraction
+function pos(R,G,B,fs){
+  const n=R.length,L=Math.round(1.6*fs),H=new Float64Array(n);
+  if(n<L+2)return H;
+  const s1=new Float64Array(L),s2=new Float64Array(L);
+  for(let t=0;t+L<=n;t++){
+    let mr=0,mg=0,mb=0;
+    for(let k=0;k<L;k++){mr+=R[t+k];mg+=G[t+k];mb+=B[t+k]}
+    mr/=L;mg/=L;mb/=L;
+    if(mr<1e-6||mg<1e-6||mb<1e-6)continue;
+    for(let k=0;k<L;k++){
+      const r=R[t+k]/mr,g=G[t+k]/mg,b=B[t+k]/mb;
+      s1[k]=g-b;s2[k]=-2*r+g+b;
+    }
+    const a=stdev(s1)/(stdev(s2)||1e-9);
+    let hm=0;const h=new Float64Array(L);
+    for(let k=0;k<L;k++){h[k]=s1[k]+a*s2[k];hm+=h[k]}
+    hm/=L;
+    for(let k=0;k<L;k++)H[t+k]+=h[k]-hm;
+  }
+  return H;
+}
+function spectrum(x,fs,fmin,fmax,df){
+  const n=x.length,m=mean(x),xs=new Float64Array(n);
+  for(let i=0;i<n;i++)xs[i]=(x[i]-m)*(0.5-0.5*Math.cos(2*Math.PI*i/(n-1)));
+  const nf=Math.floor((fmax-fmin)/df+1e-9)+1,f=new Float64Array(nf),P=new Float64Array(nf);
+  for(let k=0;k<nf;k++){
+    const fr=fmin+k*df,om=2*Math.PI*fr/fs,cw=Math.cos(om),sw=Math.sin(om);
+    let c=1,s=0,re=0,im=0;
+    for(let i=0;i<n;i++){re+=xs[i]*c;im+=xs[i]*s;const c2=c*cw-s*sw;s=s*cw+c*sw;c=c2}
+    f[k]=fr;P[k]=re*re+im*im;
+  }
+  return {f,P};
+}
+// dominant peak + SNR (power at fundamental/2nd harmonic vs. the rest of the band)
+function peakInfo(sp,T,fmax){
+  const {f,P}=sp;let k=0;
+  for(let i=1;i<P.length;i++)if(P[i]>P[k])k=i;
+  const fp=f[k],hw=Math.max(0.1,2.2/T);
+  let sig=0,tot=0;
+  for(let i=0;i<P.length;i++){
+    tot+=P[i];
+    if(Math.abs(f[i]-fp)<=hw||(2*fp<=fmax&&Math.abs(f[i]-2*fp)<=hw))sig+=P[i];
+  }
+  const noise=Math.max(tot-sig,1e-12);
+  return {f:fp,snrDb:10*Math.log10(sig/noise+1e-12)};
+}
+function detectPeaks(x,fs,hrBpm){
+  const md=Math.max(Math.round(0.33*fs),Math.round(0.55*60/hrBpm*fs)),idx=[],sd=stdev(x);
+  for(let i=1;i<x.length-1;i++){
+    if(x[i]>x[i-1]&&x[i]>=x[i+1]&&x[i]>0.15*sd){
+      if(idx.length&&i-idx[idx.length-1]<md){if(x[i]>x[idx[idx.length-1]])idx[idx.length-1]=i}
+      else idx.push(i);
+    }
+  }
+  return idx.map(i=>{
+    const y0=x[i-1],y1=x[i],y2=x[i+1],den=y0-2*y1+y2,d=den?0.5*(y0-y2)/den:0;
+    return (i+clamp(d,-1,1))/fs;
+  });
+}
+function cleanIBI(times){
+  const ibi=[];
+  for(let i=1;i<times.length;i++)ibi.push((times[i]-times[i-1])*1000);
+  const ok=ibi.map(v=>v>=300&&v<=1500);
+  for(let i=0;i<ibi.length;i++){
+    if(!ok[i])continue;
+    const loc=[];
+    for(let j=Math.max(0,i-3);j<Math.min(ibi.length,i+4);j++)if(ibi[j]>=300&&ibi[j]<=1500)loc.push(ibi[j]);
+    const med=median(loc);
+    if(Math.abs(ibi[i]-med)>0.22*med)ok[i]=false;
+  }
+  return {ibi,ok};
+}
+function hrvStats(ibi,ok){
+  const v=ibi.filter((_,i)=>ok[i]);
+  if(v.length<15)return null;
+  const d=[];
+  for(let i=1;i<ibi.length;i++)if(ok[i]&&ok[i-1])d.push(ibi[i]-ibi[i-1]);
+  if(d.length<10)return null;
+  return {rmssd:Math.sqrt(mean(d.map(x=>x*x))),sdnn:stdev(v),meanIbi:mean(v),n:v.length};
+}
+function respFromIBI(times,ok){
+  const t=[],v=[];
+  for(let i=1;i<times.length;i++)if(ok[i-1]){t.push(times[i]*1000);v.push((times[i]-times[i-1])*1000)}
+  if(t.length<20)return null;
+  const r=resample(t,v,4);
+  if(r.length<40)return null;
+  const f=bandpass(detrend(r),4,0.1,0.5);
+  const T=r.length/4;
+  const pk=peakInfo(spectrum(f,4,0.1,0.5,0.005),T,0.5);
+  return {rr:pk.f*60,snrDb:pk.snrDb};
+}
+// S: {t:[ms], r:[], g:[], b:[]} ROI means per frame
+function analyze(S,opts={}){
+  const n=S.t.length;
+  if(n<FS*6)return null;
+  const dur=(S.t[n-1]-S.t[0])/1000;
+  if(dur<6)return null;
+  const R=resample(S.t,S.r,FS),G=resample(S.t,S.g,FS),B=resample(S.t,S.b,FS);
+  const pulse=bandpass(detrend(pos(R,G,B,FS)),FS,0.7,3.5);
+  const T=R.length/FS;
+  const pk=peakInfo(spectrum(pulse,FS,0.7,3.5,0.01),T,3.5);
+  const hr=pk.f*60;
+  const out={hr,snrDb:pk.snrDb,quality:Math.round(clamp((pk.snrDb+3)/11,0,1)*100),dur,pulse,fs:FS};
+  if(opts.fast)return out;
+
+  // beats + HRV
+  const times=detectPeaks(pulse,FS,hr);
+  out.peakTimes=times;
+  const {ibi,ok}=cleanIBI(times);
+  out.beats=times.length;
+  const h=hrvStats(ibi,ok);
+  if(h){
+    out.hrv=h;
+    out.hrFromPeaks=60000/h.meanIbi;
+    const okFrac=ok.filter(Boolean).length/Math.max(ok.length,1);
+    out.hrvReliable=Math.abs(out.hrFromPeaks-hr)<5&&out.quality>=50&&okFrac>=.8;
+    out.stress=Math.round(clamp(100*(1-(Math.log(h.rmssd)-Math.log(15))/(Math.log(90)-Math.log(15))),0,100));
+  }
+
+  // respiration: baseline modulation of the green channel + RSA in the IBI series
+  const gm=mean(G),gn=Float64Array.from(G,v=>v/gm-1);
+  const rf=bandpass(detrend(gn),FS,0.1,0.5);
+  const rp=peakInfo(spectrum(rf,FS,0.1,0.5,0.005),T,0.5);
+  const a={rr:rp.f*60,snrDb:rp.snrDb};
+  const b=h?respFromIBI(times,ok):null;
+  let rr=a;
+  if(b){
+    if(Math.abs(a.rr-b.rr)<=3)rr={rr:(a.rr+b.rr)/2,snrDb:Math.max(a.snrDb,b.snrDb)+1.5};
+    else rr=b.snrDb>a.snrDb?b:a;
+  }
+  out.rr=rr.rr;out.rrSnr=rr.snrDb;
+  // respiration confidence can never exceed the cardiac signal quality it was extracted from
+  out.rrQuality=Math.min(Math.round(clamp((rr.snrDb-1)/8,0,1)*100),out.quality);
+  return out;
+}
+// ==DSP-END==
+
+/* ───────────── PWA bits ───────────── */
+function makeIcon(sz){
+  const c=document.createElement('canvas');c.width=c.height=sz;const x=c.getContext('2d');
+  const g=x.createLinearGradient(0,0,sz,sz);g.addColorStop(0,'#0f2a33');g.addColorStop(1,'#071017');
+  x.fillStyle=g;x.fillRect(0,0,sz,sz);
+  x.strokeStyle='#35e0c1';x.lineWidth=sz*0.045;x.lineCap=x.lineJoin='round';x.beginPath();
+  [[.12,.55],[.32,.55],[.40,.38],[.50,.74],[.60,.24],[.68,.55],[.88,.55]].forEach((q,i)=>i?x.lineTo(q[0]*sz,q[1]*sz):x.moveTo(q[0]*sz,q[1]*sz));
+  x.stroke();return c.toDataURL('image/png');
+}
+try{
+  const i192=makeIcon(192),i512=makeIcon(512);
+  $('#appleIcon').href=makeIcon(180);
+  const manifest={name:'NĀḌĪ — Face Vitals',short_name:'NĀḌĪ',description:'Camera-based wellness scan',
+    start_url:location.href.split('#')[0].split('?')[0],display:'standalone',orientation:'portrait',
+    background_color:'#070b10',theme_color:'#070b10',
+    icons:[{src:i192,sizes:'192x192',type:'image/png',purpose:'any maskable'},{src:i512,sizes:'512x512',type:'image/png',purpose:'any maskable'}]};
+  $('#manifestLink').href=URL.createObjectURL(new Blob([JSON.stringify(manifest)],{type:'application/manifest+json'}));
+}catch(e){}
+if('serviceWorker' in navigator&&location.protocol.startsWith('http')){navigator.serviceWorker.register('sw.js').catch(()=>{})}
+
+/* ───────────── state ───────────── */
+const WARM=3,SCAN_S=30;
+const MP_VER='0.10.14';
+const MP_BASE='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@'+MP_VER;
+const MP_MODEL='https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+const video=$('#video'),overlay=$('#overlay'),work=$('#work'),wctx=work.getContext('2d',{willReadFrequently:true}),octx=overlay.getContext('2d');
+const S={running:false,scanning:false,stream:null,landmarker:null,mpState:'idle',frame:0,lastVT:-1,
+  face:{present:false,rois:[],fw:0,cx:0,cy:0,speed:0,seen:0,fallback:false},
+  bri:128,sat:0,tStart:0,data:{t:[],r:[],g:[],b:[]},gaps:0,lastT:0,
+  hp:{ema:null,ring:[]},liveSnr:null,liveHr:null,lastLive:0,lastUi:0,result:null};
+
+function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id===id));window.scrollTo(0,0)}
+
+/* ───────────── MediaPipe face landmarks (on-device) ───────────── */
+async function initMP(){
+  if(S.landmarker||S.mpState==='loading')return;
+  S.mpState='loading';
+  try{
+    const mod=await import(MP_BASE+'/vision_bundle.mjs');
+    const fileset=await mod.FilesetResolver.forVisionTasks(MP_BASE+'/wasm');
+    for(const delegate of ['GPU','CPU']){
+      try{
+        S.landmarker=await mod.FaceLandmarker.createFromOptions(fileset,{
+          baseOptions:{modelAssetPath:MP_MODEL,delegate},runningMode:'VIDEO',numFaces:1});
+        break;
+      }catch(e){S.landmarker=null}
+    }
+    S.mpState=S.landmarker?'ready':'fallback';
+  }catch(e){S.mpState='fallback'}
+  $('#modeNote').textContent=S.mpState==='ready'?'face tracking on':'align face in oval';
+}
+
+function lm(l,i,vw,vh){return {x:l[i].x*vw,y:l[i].y*vh}}
+function updateFace(res,now,vw,vh){
+  const F=S.face;
+  if(res&&res.faceLandmarks&&res.faceLandmarks.length){
+    const l=res.faceLandmarks[0];
+    const a=lm(l,234,vw,vh),b=lm(l,454,vw,vh),top=lm(l,10,vw,vh),mid=lm(l,9,vw,vh),c1=lm(l,50,vw,vh),c2=lm(l,280,vw,vh);
+    const fw=Math.hypot(b.x-a.x,b.y-a.y);
+    const fh={cx:(top.x+mid.x)/2,cy:(top.y+mid.y)/2,w:.42*fw,h:.15*fw};
+    const k=.17*fw;
+    const rois=[fh,{cx:c1.x,cy:c1.y,w:k,h:k},{cx:c2.x,cy:c2.y,w:k,h:k}];
+    const cx=(a.x+b.x)/2,cy=(a.y+b.y)/2;
+    if(F.present&&F.fw&&F.seen){
+      const dt=Math.max((now-F.seen)/1000,.02);
+      const sp=Math.hypot(cx-F.cx,cy-F.cy)/F.fw/dt;
+      F.speed=F.speed*.7+sp*.3;
+    }
+    F.rois=rois;F.fw=fw;F.cx=cx;F.cy=cy;F.present=true;F.seen=now;F.fallback=false;
+  }else if(now-F.seen>700){F.present=false;F.rois=[];F.speed=0}
+}
+function fallbackFace(now,vw,vh){
+  const F=S.face,fw=.55*Math.min(vw,vh*.75),cx=vw/2,cy=vh*.46;
+  const k=.17*fw;
+  F.rois=[{cx,cy:cy-.45*fw,w:.42*fw,h:.15*fw},{cx:cx-.28*fw,cy:cy+.12*fw,w:k,h:k},{cx:cx+.28*fw,cy:cy+.12*fw,w:k,h:k}];
+  F.fw=fw;F.cx=cx;F.cy=cy;F.present=true;F.seen=now;F.fallback=true;F.speed=0;
+}
+
+/* ───────────── camera + frame loop ───────────── */
+async function openCamera(){
+  S.stream=await navigator.mediaDevices.getUserMedia({
+    video:{facingMode:'user',width:{ideal:640},height:{ideal:480},frameRate:{ideal:30}},audio:false});
+  video.srcObject=S.stream;
+  await video.play().catch(()=>{});
+  await new Promise(r=>{if(video.videoWidth)r();else video.onloadedmetadata=()=>r()});
+  $('#cam').style.aspectRatio=video.videoWidth+'/'+video.videoHeight;
+  const dpr=window.devicePixelRatio||1,r=$('#cam').getBoundingClientRect();
+  overlay.width=Math.round(r.width*dpr);overlay.height=Math.round(r.height*dpr);
+}
+function closeCamera(){
+  S.running=false;
+  if(S.stream){S.stream.getTracks().forEach(t=>t.stop());S.stream=null}
+  video.srcObject=null;
+}
+function schedule(){
+  if(!S.running)return;
+  if('requestVideoFrameCallback' in HTMLVideoElement.prototype)video.requestVideoFrameCallback(onFrame);
+  else requestAnimationFrame(onFrame);
+}
+function onFrame(now){
+  if(!S.running)return;
+  schedule();
+  if(video.currentTime===S.lastVT)return;
+  S.lastVT=video.currentTime;
+  try{step(now)}catch(e){console.error(e)}
+}
+
+function step(now){
+  const vw=video.videoWidth,vh=video.videoHeight;
+  if(!vw)return;
+  S.frame++;
+  if(S.landmarker){
+    if(S.frame%3===0){
+      let res=null;try{res=S.landmarker.detectForVideo(video,performance.now())}catch(e){}
+      updateFace(res,now,vw,vh);
+    }
+  }else if(S.mpState==='fallback'){fallbackFace(now,vw,vh)}
+  sampleFrame(now,vw,vh);
+  drawOverlay(vw,vh);
+  if(now-S.lastUi>250){S.lastUi=now;updateUi(now)}
+}
+
+// mean skin-ish R,G,B over the ROIs
+function sampleFrame(now,vw,vh){
+  const F=S.face;
+  if(!F.present||!F.rois.length)return;
+  const sc=320/vw;work.width=320;work.height=Math.round(vh*sc);
+  wctx.drawImage(video,0,0,work.width,work.height);
+  let sr=0,sg=0,sb=0,n=0,ar=0,ag=0,ab=0,an=0,sat=0;
+  for(const q of F.rois){
+    const x=Math.max(0,Math.round((q.cx-q.w/2)*sc)),y=Math.max(0,Math.round((q.cy-q.h/2)*sc));
+    const w=Math.min(work.width-x,Math.round(q.w*sc)),h=Math.min(work.height-y,Math.round(q.h*sc));
+    if(w<2||h<2)continue;
+    const d=wctx.getImageData(x,y,w,h).data;
+    for(let i=0;i<d.length;i+=4){
+      const r=d[i],g=d[i+1],b=d[i+2];
+      ar+=r;ag+=g;ab+=b;an++;
+      if(r>250||g>250||b>250)sat++;
+      if(r>40&&r>g&&r>b){sr+=r;sg+=g;sb+=b;n++}
+    }
+  }
+  if(!an)return;
+  if(n<an*.25){sr=ar;sg=ag;sb=ab;n=an}
+  const R=sr/n,G=sg/n,B=sb/n;
+  S.bri=S.bri*.8+((ar+ag+ab)/(3*an))*.2;
+  S.sat=S.sat*.8+(sat/an)*.2;
+
+  // live high-passed waveform (inverted: blood absorbs green)
+  const H=S.hp;
+  H.ema=H.ema==null?G:H.ema+.08*(G-H.ema);
+  H.ring.push({t:now,v:-(G-H.ema)});
+  while(H.ring.length&&now-H.ring[0].t>6500)H.ring.shift();
+
+  if(S.scanning){
+    const el=(now-S.tStart)/1000;
+    if(el>=WARM){
+      const D=S.data;
+      if(D.t.length){const dt=(now-S.lastT)/1000;if(dt>.2)S.gaps+=dt-.2}
+      D.t.push(now);D.r.push(R);D.g.push(G);D.b.push(B);S.lastT=now;
+      if(now-S.lastLive>1000&&D.t.length>FS*9){
+        S.lastLive=now;
+        const cut=now-15000;let k=0;while(k<D.t.length&&D.t[k]<cut)k++;
+        const a=analyze({t:D.t.slice(k),r:D.r.slice(k),g:D.g.slice(k),b:D.b.slice(k)},{fast:true});
+        if(a){S.liveSnr=a.snrDb;S.liveHr=a.hr}
+      }
+    }
+    if(el>=WARM+SCAN_S)finishScan();
+  }
+}
+
+/* ───────────── overlay + UI ───────────── */
+function drawOverlay(vw,vh){
+  const W=overlay.width,Hh=overlay.height,sx=W/vw,sy=Hh/vh;
+  octx.clearRect(0,0,W,Hh);
+  const good=S.face.present&&chipState().all!=='bad';
+  octx.lineWidth=3*(window.devicePixelRatio||1);
+  octx.setLineDash([10,8]);
+  octx.strokeStyle=S.scanning?'rgba(53,224,193,.85)':(good?'rgba(53,224,193,.6)':'rgba(255,255,255,.45)');
+  octx.beginPath();octx.ellipse(W/2,Hh*.46,W*.31,Hh*.34,0,0,Math.PI*2);octx.stroke();
+  octx.setLineDash([]);
+  octx.lineWidth=2*(window.devicePixelRatio||1);
+  octx.strokeStyle='rgba(124,240,218,.9)';
+  for(const q of S.face.rois){octx.strokeRect((q.cx-q.w/2)*sx,(q.cy-q.h/2)*sy,q.w*sx,q.h*sy)}
+  drawLiveWave();
+}
+function drawLiveWave(){
+  const c=$('#liveWave'),x=c.getContext('2d'),W=c.width,H=c.height;
+  x.clearRect(0,0,W,H);
+  const ring=S.hp.ring;if(ring.length<8)return;
+  const t1=ring[ring.length-1].t,span=5000,pts=ring.filter(p=>t1-p.t<=span);
+  let mx=1e-6;for(const p of pts)mx=Math.max(mx,Math.abs(p.v));
+  x.strokeStyle='#35e0c1';x.lineWidth=2;x.lineJoin='round';x.beginPath();
+  pts.forEach((p,i)=>{const px=W-(t1-p.t)/span*W,py=H/2-(p.v/mx)*(H/2-8);i?x.lineTo(px,py):x.moveTo(px,py)});
+  x.stroke();
+}
+function chipState(){
+  const F=S.face,c={};
+  c.face=F.fallback?['warn','Manual']:F.present?['ok','Found']:['bad','Not found'];
+  c.light=S.bri<55?['bad','Too dark']:S.bri<80?['warn','Dim']:(S.bri>225||S.sat>.15)?['bad','Too bright']:['ok','Good'];
+  c.steady=F.fallback?['warn','—']:F.speed>.3?['bad','Moving']:F.speed>.15?['warn','Slight']:['ok','Still'];
+  if(S.liveSnr==null)c.signal=['','Measuring'];
+  else c.signal=S.liveSnr>3?['ok','Strong']:S.liveSnr>0?['warn','Fair']:['bad','Weak'];
+  const arr=[c.face[0],c.light[0],c.steady[0]];
+  c.all=arr.includes('bad')?'bad':arr.includes('warn')?'warn':'ok';
+  return c;
+}
+function updateUi(now){
+  const c=chipState();
+  const set=(id,label,v)=>{const e=$(id);e.className='chip '+v[0];e.innerHTML=label+'<b>'+v[1]+'</b>'};
+  set('#cFace','Face',c.face);set('#cLight','Light',c.light);set('#cSteady','Steady',c.steady);set('#cSignal','Signal',c.signal);
+  let hint='Looks good. Hold steady.';
+  if(!S.face.present)hint='Move your face into the oval';
+  else if(c.light[1]==='Too dark'||c.light[1]==='Dim')hint='More light on your face: face a window or lamp';
+  else if(c.light[1]==='Too bright')hint='Too bright: avoid direct glare or sun on your face';
+  else if(c.steady[0]==='bad')hint='Hold still';
+  $('#hint').textContent=hint;
+  $('#goBtn').disabled=S.scanning||!S.face.present||S.mpState==='loading';
+  if(S.scanning){
+    const el=(now-S.tStart)/1000;
+    if(el<WARM){$('#phase').textContent='Settling camera…';$('#clock').textContent='';$('#prog').style.width='0%'}
+    else{
+      const m=el-WARM;
+      $('#phase').textContent='Measuring';
+      $('#clock').textContent=Math.max(0,Math.ceil(SCAN_S-m))+' s';
+      $('#prog').style.width=clamp(m/SCAN_S*100,0,100)+'%';
+    }
+    if(S.liveHr&&S.liveSnr!=null&&S.liveSnr>-1){
+      $('#liveHr').innerHTML=Math.round(S.liveHr)+'<small>bpm</small>';$('#liveNote').textContent='live estimate, refining';
+    }else{$('#liveHr').innerHTML='--<small>bpm</small>';$('#liveNote').textContent=el<WARM?'settling':'reading pulse…'}
+  }
+}
+
+/* ───────────── scan control ───────────── */
+async function startFlow(){
+  show('scan');
+  resetScan();
+  $('#hint').textContent='Starting camera…';
+  try{
+    initMP();
+    await openCamera();
+    S.running=true;S.lastVT=-1;S.frame=0;S.face={present:false,rois:[],fw:0,cx:0,cy:0,speed:0,seen:0,fallback:false};
+    $('#modeNote').textContent=S.mpState==='ready'?'face tracking on':'loading face tracking…';
+    schedule();
+  }catch(e){
+    $('#hint').innerHTML='<span class="err">Camera unavailable. Allow camera access (needs HTTPS) and try again.</span>';
+  }
+}
+function resetScan(){
+  S.scanning=false;S.data={t:[],r:[],g:[],b:[]};S.gaps=0;S.liveSnr=null;S.liveHr=null;S.lastLive=0;
+  S.hp={ema:null,ring:[]};
+  $('#prog').style.width='0%';$('#phase').textContent='Ready';$('#clock').textContent='';
+  $('#liveHr').innerHTML='--<small>bpm</small>';$('#liveNote').textContent='waiting…';
+  $('#goBtn').textContent='Begin 30 s scan';
+}
+function beginScan(){
+  if(!S.face.present)return;
+  S.data={t:[],r:[],g:[],b:[]};S.gaps=0;S.liveSnr=null;S.liveHr=null;S.lastLive=0;
+  S.tStart=performance.now();S.scanning=true;
+  $('#goBtn').disabled=true;$('#goBtn').textContent='Scanning…';
+}
+function cancelScan(){closeCamera();S.scanning=false;show('home');renderHistory()}
+function finishScan(){
+  S.scanning=false;
+  const D=S.data,a=analyze(D);
+  const total=SCAN_S,coverage=a?clamp(1-S.gaps/total,0,1):0;
+  closeCamera();
+  S.result={a,coverage,at:Date.now()};
+  renderResult();
+  show('result');
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&S.scanning){cancelScan()}});
+
+/* ───────────── results ───────────── */
+const pillFor=q=>q>=60?['ok','High confidence']:q>=35?['warn','Medium confidence']:['bad','Low confidence'];
+function drawWave(canvas,arr,peaks,fs){
+  const dpr=window.devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;
+  canvas.width=w*dpr;canvas.height=h*dpr;
+  const x=canvas.getContext('2d');x.scale(dpr,dpr);
+  const n=Math.min(arr.length,fs*10),off=arr.length-n;
+  let mx=1e-9;for(let i=0;i<n;i++)mx=Math.max(mx,Math.abs(arr[off+i]));
+  x.strokeStyle='#35e0c1';x.lineWidth=2;x.lineJoin='round';x.beginPath();
+  for(let i=0;i<n;i++){const px=i/(n-1)*w,py=h/2-(arr[off+i]/mx)*(h/2-8);i?x.lineTo(px,py):x.moveTo(px,py)}
+  x.stroke();
+  x.fillStyle='#ff6b81';
+  for(const t of peaks||[]){
+    const i=Math.round(t*fs)-off;if(i<0||i>=n)continue;
+    x.beginPath();x.arc(i/(n-1)*w,h/2-(arr[off+i]/mx)*(h/2-8),3,0,7);x.fill();
+  }
+}
+function stressLabel(s){return s<33?'Relaxed':s<66?'Balanced':'Elevated'}
+function renderResult(){
+  const {a,coverage}=S.result,el=$('#resBody');
+  const tooFew=!a||coverage<.7;
+  if(tooFew||a.quality<20){
+    el.innerHTML=`<div class="card"><h2>Couldn't get a clean reading</h2>
+      <p style="margin:0 0 8px;font-size:14px">${tooFew?'The face was lost or the scan was interrupted for too long.':'The pulse signal was too weak or noisy.'}</p>
+      <ul class="plain"><li>Use brighter, even light on your face</li><li>Stay still and don't talk</li><li>Keep forehead and cheeks uncovered</li><li>Steady the phone on a surface</li></ul></div>`;
+    S.result.summary=null;$('#shareBtn').style.display='none';return;
+  }
+  $('#shareBtn').style.display='';
+  const hp=pillFor(a.quality),rp=pillFor(a.rrQuality);
+  const rrOk=a.rrQuality>=40;
+  let hrvCard='';
+  if(a.hrv&&a.hrvReliable){
+    const sl=stressLabel(a.stress);
+    hrvCard=`<div class="stat"><div class="k">HRV · RMSSD</div><div class="v">${Math.round(a.hrv.rmssd)}<small>ms</small></div>
+      <div class="s">SDNN ${Math.round(a.hrv.sdnn)} ms · ${a.hrv.n} beats</div><span class="pill warn">Indicative</span></div>
+      <div class="stat"><div class="k">Stress index</div><div class="v">${a.stress}<small>/100</small></div>
+      <div class="s">${sl}</div><span class="pill warn">Indicative</span></div>
+      <div class="stat wide"><div class="k">Autonomic balance</div><div class="gauge"><i style="left:calc(${a.stress}% - 2px)"></i></div>
+      <div class="s" style="display:flex;justify-content:space-between"><span>Relaxed</span><span>Elevated</span></div></div>`;
+  }else{
+    hrvCard=`<div class="stat wide"><div class="k">HRV &amp; stress</div><div class="s" style="margin-top:6px">Beat timing wasn't clean enough for a trustworthy HRV. Retry with steadier, brighter conditions.</div></div>`;
+  }
+  el.innerHTML=`<div class="grid">
+    <div class="stat"><div class="k">Heart rate</div><div class="v">${Math.round(a.hr)}<small>bpm</small></div>
+      <div class="s">Typical resting adult: 60–100</div><span class="pill ${hp[0]}">${hp[1]}</span></div>
+    <div class="stat"><div class="k">Respiration</div><div class="v">${rrOk?Math.round(a.rr):'--'}<small>/min</small></div>
+      <div class="s">Typical resting adult: 12–20</div><span class="pill ${rrOk?rp[0]:'bad'}">${rrOk?rp[1]:'Not reliable'}</span></div>
+    ${hrvCard}
+    <div class="stat wide"><div class="k">Pulse waveform · last 10 s</div><canvas class="wave" id="resWave" style="margin-top:8px"></canvas>
+      <div class="s" style="margin-top:6px">Signal quality ${a.quality}/100 · coverage ${Math.round(S.result.coverage*100)}% · ${a.beats} beats detected</div></div>
+  </div>
+  <p class="disc">Camera-based estimates vary with lighting, motion and skin tone, and are not diagnostic. If you feel unwell or a reading worries you, talk to a doctor.</p>`;
+  drawWave($('#resWave'),a.pulse,a.peakTimes,a.fs);
+  S.result.summary={t:Date.now(),hr:Math.round(a.hr),rr:rrOk?Math.round(a.rr):null,
+    rmssd:a.hrv&&a.hrvReliable?Math.round(a.hrv.rmssd):null,stress:a.hrv&&a.hrvReliable?a.stress:null,q:a.quality};
+  saveHistory(S.result.summary);
+}
+
+/* ───────────── history + share ───────────── */
+const HK='nadi.history.v1';
+function loadHistory(){try{return JSON.parse(localStorage.getItem(HK)||'[]')}catch(e){return[]}}
+function saveHistory(s){try{const h=loadHistory();h.unshift(s);localStorage.setItem(HK,JSON.stringify(h.slice(0,20)))}catch(e){}}
+function renderHistory(){
+  const h=loadHistory().slice(0,8),card=$('#histCard');
+  if(!h.length){card.style.display='none';return}
+  card.style.display='';
+  $('#histList').innerHTML=h.map(r=>{
+    const d=new Date(r.t),ds=d.toLocaleDateString(undefined,{day:'numeric',month:'short'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+    return `<div class="hist"><span>${ds}</span><span>${r.hr} bpm${r.rr?' · '+r.rr+'/min':''}${r.rmssd?' · '+r.rmssd+' ms':''}</span></div>`;
+  }).join('');
+}
+async function share(){
+  const s=S.result&&S.result.summary;if(!s)return;
+  const text=`NĀḌĪ face scan: HR ${s.hr} bpm${s.rr?', resp '+s.rr+'/min':''}${s.rmssd?', HRV (RMSSD) '+s.rmssd+' ms':''}. Wellness estimate, not a diagnosis.`;
+  try{if(navigator.share)await navigator.share({title:'NĀḌĪ scan',text});else await navigator.clipboard.writeText(text)}catch(e){}
+}
+
+/* ───────────── wiring ───────────── */
+$('#startBtn').onclick=startFlow;
+$('#goBtn').onclick=beginScan;
+$('#cancelBtn').onclick=cancelScan;
+$('#againBtn').onclick=startFlow;
+$('#homeBtn').onclick=()=>{show('home');renderHistory()};
+$('#shareBtn').onclick=share;
+$('#clearHist').onclick=()=>{try{localStorage.removeItem(HK)}catch(e){}renderHistory()};
+renderHistory();
+</script>
+</body>
+</html>
