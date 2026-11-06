@@ -174,7 +174,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v9</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v10</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -630,7 +630,7 @@ function updateFace(res,now,vw,vh){
   }else if(now-F.seen>700){F.present=false;F.rois=[];F.speed=0;F.hist=[]}
 }
 function fallbackFace(now,vw,vh){
-  const F=S.face,fw=.55*Math.min(vw,vh*.75),cx=vw/2,cy=vh*.46;
+  const F=S.face,fw=.42*Math.min(vw,vh*.75),cx=vw/2,cy=vh*.36;
   const k=.2*fw;
   F.rois=[{cx,cy:cy-.45*fw,w:.5*fw,h:.17*fw},{cx:cx-.28*fw,cy:cy+.12*fw,w:k,h:k},{cx:cx+.28*fw,cy:cy+.12*fw,w:k,h:k}];
   F.fw=fw;F.cx=cx;F.cy=cy;F.present=true;F.seen=now;F.fallback=true;F.speed=0;
@@ -809,7 +809,7 @@ function drawOverlay(vw,vh){
   octx.lineWidth=3*(window.devicePixelRatio||1);
   octx.setLineDash([10,8]);
   octx.strokeStyle=S.scanning?'rgba(53,224,193,.85)':(good?'rgba(53,224,193,.6)':'rgba(255,255,255,.45)');
-  octx.beginPath();octx.ellipse(W/2,Hh*.46,W*.31,Hh*.34,0,0,Math.PI*2);octx.stroke();
+  octx.beginPath();octx.ellipse(W/2,Hh*.36,W*.235,Hh*.25,0,0,Math.PI*2);octx.stroke();
   octx.setLineDash([]);
   octx.lineWidth=2*(window.devicePixelRatio||1);
   octx.strokeStyle='rgba(124,240,218,.9)';
@@ -842,7 +842,7 @@ function updateUi(now){
   const set=(id,label,v)=>{const e=$(id);e.className='chip '+v[0];e.innerHTML=label+'<b>'+v[1]+'</b>'};
   set('#cFace','Face',c.face);set('#cLight','Light',c.light);set('#cSteady','Steady',c.steady);set('#cSignal','Signal',c.signal);
   let hint=you('Looks good. Hold steady.','Looks good. Ask them to hold still.');
-  if(!S.face.present)hint=you('Move your face into the oval','Ask them to move their face into the oval');
+  if(!S.face.present)hint=you('Fit your face in the oval, with your shoulders below it','Ask them to move their face into the oval');
   else if(c.light[1]==='Too dark'||c.light[1]==='Dim')hint=you('More light on your face: face a window or lamp','More light on their face: a window or lamp in front of them');
   else if(c.light[1]==='Too bright')hint=you('Too bright: avoid direct glare or sun on your face','Too bright: avoid direct glare or sun on their face');
   else if(c.steady[0]==='bad')hint=you('Hold still. Prop the phone on a surface if you can.','Ask them to hold still. Prop the phone on a surface if you can.');

@@ -1,5 +1,5 @@
 // NĀḌĪ service worker: offline shell + runtime cache for MediaPipe assets
-const C = 'nadi-v9';
+const C = 'nadi-v10';
 const HOSTS = ['cdn.jsdelivr.net', 'storage.googleapis.com'];
 
 self.addEventListener('install', e => {
