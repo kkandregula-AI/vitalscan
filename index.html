@@ -39,6 +39,12 @@ ul.plain li{margin:4px 0}
 .note{font-size:12px;color:var(--muted)}
 .disc{font-size:12px;color:var(--muted);border-left:3px solid var(--warn);padding:6px 10px;background:rgba(255,200,87,.06);border-radius:6px;margin:12px 0}
 footer{margin-top:18px;text-align:center;font-size:11px;color:#5d7287}
+.pchips{display:flex;flex-wrap:wrap;gap:8px}
+.pchip{appearance:none;border:1px solid var(--line);background:var(--card2);color:var(--text);padding:9px 14px;border-radius:99px;font-size:14px;font-weight:600;cursor:pointer}
+.pchip.on{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#05231d;border-color:transparent}
+.pchip.add{color:var(--accent);border-style:dashed}
+.seg.on{border-color:var(--accent);color:var(--accent)}
+.refin{width:100%;margin-top:8px;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card2);color:var(--text);font-size:16px}
 
 /* camera */
 .cam{position:relative;width:100%;max-width:440px;margin:0 auto 10px;border-radius:18px;overflow:hidden;background:#000;border:1px solid var(--line);aspect-ratio:3/4}
@@ -105,12 +111,27 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
         <li>It starts by itself once you're ready. Stay still and quiet for about 30 seconds.</li>
         <li>Remove glasses/cap if they cover the forehead or cheeks.</li>
         <li><b>Prop the phone</b> on a stand or table at about arm's length. Holding it in your hand adds motion that swamps the pulse.</li>
+        <li>Sit back a little so your <b>shoulders are in view</b>. Breathing is read from their movement, like Google Fit does.</li>
       </ul>
+    </div>
+    <div class="card" id="whoCard">
+      <h2>Who is being scanned?</h2>
+      <div class="pchips" id="whoChips"></div>
+      <div id="addForm" style="display:none;margin-top:12px">
+        <input class="refin" id="pName" maxlength="24" placeholder="Name" style="margin-top:0">
+        <div class="row" style="margin-top:8px">
+          <button class="btn ghost seg on" id="gAdult" style="padding:10px;font-size:14px">Adult</button>
+          <button class="btn ghost seg" id="gChild" style="padding:10px;font-size:14px">Child (6–12)</button>
+        </div>
+        <p class="note" style="margin:8px 0">Only scan someone with their OK. Not meant for babies. Names stay on this phone.</p>
+        <div class="row"><button class="btn ghost" id="pCancel" style="padding:10px;font-size:14px">Cancel</button><button class="btn" id="pSave" style="padding:10px;font-size:14px">Add</button></div>
+      </div>
+      <button class="btn ghost" id="rmPerson" style="display:none;margin-top:10px;padding:10px;font-size:13px"></button>
     </div>
     <button class="btn" id="startBtn">Start scan</button>
     <p class="disc">Wellness estimate only. Not a medical device and not for diagnosis. Video is processed on your phone and is never uploaded or stored.</p>
     <div class="card" id="histCard" style="display:none">
-      <h2>Recent scans</h2>
+      <h2 id="histTitle">Recent scans</h2>
       <div id="histList"></div>
       <button class="btn ghost" id="clearHist" style="margin-top:10px;padding:10px;font-size:13px">Clear history</button>
     </div>
@@ -153,7 +174,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v6</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v7</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -163,6 +184,9 @@ const $=(s,r=document)=>r.querySelector(s);
 
 // ==DSP-START==
 const FS=30;
+// a breathing peak is "solid" if it stands s dB above the local noise AND shows up at the same rate in c of the 16 s stretches.
+// Defaults come from false-alarm tests on pure noise (~7% at 30 s of data, ~0% at 60 s).
+const solid=(x,s=12,c=.75)=>!!x&&x.snrDb>=s&&x.cons>=c;
 const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
 const mean=a=>{let s=0;for(let i=0;i<a.length;i++)s+=a[i];return a.length?s/a.length:0};
 const stdev=a=>{const m=mean(a);let s=0;for(let i=0;i<a.length;i++){const d=a[i]-m;s+=d*d}return a.length?Math.sqrt(s/a.length):0};
@@ -309,10 +333,9 @@ function respFromIBI(times,ok){
   if(t.length<20)return null;
   const r=resample(t,v,4);
   if(r.length<40)return null;
-  const f=bandpass(detrend(r),4,0.1,0.5);
-  const T=r.length/4;
-  const pk=peakInfo(spectrum(f,4,0.1,0.5,0.005),T,0.5);
-  return {rr:pk.f*60,snrDb:pk.snrDb};
+  const f=bandpass(detrend(r),4,0.1,0.6);
+  const pk=respPeakStable(f,4,0.12,0.55);
+  return {rr:pk.f*60,snrDb:pk.snrDb,cons:pk.cons};
 }
 // clip motion bursts so they can't dominate the spectrum (robust 3-sigma on the median/MAD scale)
 function clipOutliers(x,k){
@@ -368,7 +391,77 @@ function bgArtifacts(S){
   for(let i=1;i<avg.P.length-1;i++)if(avg.P[i]>3.5*med&&avg.P[i]>=avg.P[i-1]&&avg.P[i]>=avg.P[i+1])out.push(avg.f[i]);
   return out.slice(0,4);
 }
-// S: {t:[ms], r:[], g:[], b:[], rois:[{r,g,b}], bg:[]} ROI means per frame
+// How far the best breathing-band peak stands above the noise floor RIGHT AROUND it.
+// (Slow drift tilts the spectrum, so "peak vs the rest of the band" always looks great near the low edge: that
+// fooled the first versions into reporting a confident but wrong breathing rate.) Peaks at the band edges are ignored.
+function respPeak(x,fs,lo,hi){
+  const sp=spectrum(x,fs,lo,hi,0.005),n=sp.P.length,lp=new Float64Array(n);
+  for(let i=0;i<n;i++)lp[i]=Math.log(sp.P[i]+1e-12);
+  // straight line through log-power = the tilted noise floor (optionally skipping the bins around a candidate peak)
+  const fit=skipF=>{
+    let c=0,sx=0,sy=0,sxx=0,sxy=0;
+    for(let i=0;i<n;i++){
+      if(skipF!=null&&Math.abs(sp.f[i]-skipF)<0.09)continue;
+      c++;sx+=sp.f[i];sy+=lp[i];sxx+=sp.f[i]*sp.f[i];sxy+=sp.f[i]*lp[i];
+    }
+    const d=c*sxx-sx*sx;
+    if(c<12||!d)return null;
+    const b=(c*sxy-sx*sy)/d;
+    return {a:(sy-b*sx)/c,b};
+  };
+  const f1=fit(null);
+  if(!f1)return {f:(lo+hi)/2,snrDb:-20};
+  let k=-1,best=-1e9;
+  for(let i=0;i<n;i++){
+    if(sp.f[i]<lo+0.025||sp.f[i]>hi-0.025)continue;
+    const r=lp[i]-(f1.a+f1.b*sp.f[i]);
+    if(r>best){best=r;k=i}
+  }
+  if(k<0)return {f:(lo+hi)/2,snrDb:-20};
+  const f2=fit(sp.f[k])||f1;
+  return {f:sp.f[k],snrDb:(lp[k]-(f2.a+f2.b*sp.f[k]))*4.3429};
+}
+// respPeak on the whole record + "does the same rate show up in every 16 s stretch?" (noise peaks wander, breathing doesn't)
+function respPeakStable(x,fs,lo,hi){
+  const full=respPeak(x,fs,lo,hi),W=Math.round(16*fs),hop=Math.round(2*fs);
+  if(x.length<W+hop||full.snrDb<=-20)return {...full,cons:0.5};
+  let n=0,hit=0;
+  for(let s=0;s+W<=x.length;s+=hop){
+    const w=respPeak(x.slice(s,s+W),fs,lo,hi);n++;
+    if(w.snrDb>=4&&Math.abs(w.f-full.f)*60<=3)hit++;
+  }
+  return {...full,cons:n?hit/n:0};
+}
+// ---- breathing from body movement (the way Google Fit does it): vertical shift of the shoulder/chest rows ----
+// rows = per-row mean brightness of a strip below the chin. Normalised so camera exposure changes cancel.
+function normProfile(a){
+  const n=a.length,s=new Float64Array(n);
+  for(let i=0;i<n;i++)s[i]=(a[Math.max(0,i-1)]+2*a[i]+a[Math.min(n-1,i+1)])/4;
+  const m=mean(s),sd=stdev(s);
+  if(!(sd>1.5))return null;                 // flat strip (blank wall): nothing to track
+  for(let i=0;i<n;i++)s[i]=(s[i]-m)/sd;
+  return s;
+}
+// 1-D Lucas–Kanade: if c(x)=p(x-d) then d≈-Σ Ix·It / Σ Ix². Rows moved DOWN, as a fraction of a row.
+function profileShift(p,c){
+  let num=0,den=0;
+  for(let i=2;i<p.length-2;i++){const ix=(p[i+1]-p[i-1])/2,it=c[i]-p[i];num+=ix*it;den+=ix*ix}
+  if(den<0.3)return 0;
+  const d=-num/den;
+  return Math.abs(d)>1.5?0:d;
+}
+// v = per-frame vertical velocity of the chest rows (rows/frame). Returns breaths/min + how clear the peak is.
+function chestResp(t,v){
+  if(!v||v.length!==t.length||v.length<FS*10)return null;
+  const vv=clipOutliers(Float64Array.from(v),4);          // head bumps / posture shifts
+  const pos=new Float64Array(vv.length);let s=0;
+  for(let i=0;i<vv.length;i++){s+=vv[i];pos[i]=s}
+  const x=resample(t,pos,FS);
+  const f=bandpass(detrend(x),FS,0.1,0.6);
+  const pk=respPeakStable(f,FS,0.12,0.55);
+  return {rr:pk.f*60,snrDb:pk.snrDb,cons:pk.cons,amp:stdev(f)};
+}
+// S: {t:[ms], r:[], g:[], b:[], rois:[{r,g,b}], bg:[], chestV:[]} ROI means per frame
 function analyze(S,opts={}){
   const n=S.t.length;
   if(n<FS*6)return null;
@@ -420,23 +513,29 @@ function analyze(S,opts={}){
     out.stress=Math.round(clamp(100*(1-(Math.log(h.rmssd)-Math.log(15))/(Math.log(90)-Math.log(15))),0,100));
   }
 
-  // respiration: baseline modulation of the green channel + RSA in the IBI series
+  // respiration: three independent looks.
+  //  A = slow wobble of the skin colour, B = heart rate speeding up/slowing down with each breath (RSA),
+  //  C = shoulder/chest movement (what Google Fit uses). Colour-only readings are capped at "medium".
   const gm=mean(G),gn=Float64Array.from(G,v=>v/gm-1);
-  const rf=bandpass(detrend(gn),FS,0.1,0.5);
-  const rp=peakInfo(spectrum(rf,FS,0.1,0.5,0.005),T,0.5);
-  const a={rr:rp.f*60,snrDb:rp.snrDb};
+  const rf=bandpass(detrend(gn),FS,0.1,0.6);
+  const rp=respPeakStable(rf,FS,0.12,0.55);
+  const a={rr:rp.f*60,snrDb:rp.snrDb,cons:rp.cons};
   const b=h?respFromIBI(times,ok):null;
-  let rr=a;
-  const agree=!!b&&Math.abs(a.rr-b.rr)<=3;
-  if(b){
-    if(agree)rr={rr:(a.rr+b.rr)/2,snrDb:Math.max(a.snrDb,b.snrDb)+1.5};
-    else rr=b.snrDb>a.snrDb?b:a;
+  const c=chestResp(S.t,S.chestV);
+  const near=(x,y)=>!!x&&!!y&&Math.abs(x.rr-y.rr)<=3;
+  const q01=x=>Math.round(clamp((x.snrDb-10)/15,0,1)*100);
+  let rr,rq,src;
+  if(solid(c)&&((near(c,a)&&solid(a,6,.5))||(near(c,b)&&solid(b,6,.5)))){
+    const o=near(c,a)&&solid(a,6,.5)?a:b;rr=(2*c.rr+o.rr)/3;rq=Math.max(60,q01(c));src='movement + colour';
+  }else if(solid(c,14,.85)){
+    rr=c.rr;rq=Math.min(55,Math.max(40,q01(c)));src='movement';
+  }else if(solid(a)&&solid(b)&&near(a,b)){
+    const best=a.snrDb>b.snrDb?a:b;rr=(a.rr+b.rr)/2;rq=Math.min(50,Math.max(40,q01(best)),out.quality);src='colour';
+  }else{
+    const best=b&&b.snrDb>a.snrDb?b:a;rr=best.rr;rq=Math.min(30,q01(best),out.quality);src='colour (unconfirmed)';
   }
-  out.rr=rr.rr;out.rrSnr=rr.snrDb;
-  // respiration is the weakest camera signal: it can never beat the pulse quality, and
-  // without two independent methods agreeing it is capped below the display threshold
-  const rrBase=Math.min(Math.round(clamp((rr.snrDb-1)/8,0,1)*100),out.quality);
-  out.rrQuality=agree?rrBase:Math.min(rrBase,35);
+  out.rr=rr;out.rrQuality=rq;out.rrSrc=src;
+  out.rrDetail={movement:c?c.rr:null,colour:a.rr,timing:b?b.rr:null,movementSnr:c?c.snrDb:null};
   return out;
 }
 // ==DSP-END==
@@ -462,7 +561,7 @@ try{
 if('serviceWorker' in navigator&&location.protocol.startsWith('http')){navigator.serviceWorker.register('sw.js').catch(()=>{})}
 
 /* ───────────── state ───────────── */
-const WARM=3,SCAN_S=30,SCAN_MAX=60;
+const WARM=3,SCAN_S=30,SCAN_MAX=60,RESP_MAX=45;
 const MP_VER='0.10.14';
 const MP_BASE='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@'+MP_VER;
 const MP_MODEL='https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
@@ -472,7 +571,7 @@ const S={running:false,scanning:false,stream:null,landmarker:null,mpState:'idle'
   face:{present:false,rois:[],fw:0,cx:0,cy:0,speed:0,seen:0,fallback:false},
   bri:128,sat:0,tStart:0,data:newData(),gaps:0,mbad:0,mtot:0,lastT:0,
   hp:{ema:null,ring:[]},liveQ:null,liveCons:null,liveHr:null,lastLive:0,lastUi:0,result:null};
-function newData(){return {t:[],r:[],g:[],b:[],bg:[],rois:[0,1,2].map(()=>({r:[],g:[],b:[]}))}}
+function newData(){return {t:[],r:[],g:[],b:[],bg:[],chestV:[],rois:[0,1,2].map(()=>({r:[],g:[],b:[]}))}}
 
 function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id===id));window.scrollTo(0,0)}
 
@@ -595,6 +694,13 @@ function bgMean(sc,vw,vh){
   }
   return n>300?s/n:null;
 }
+// strip below the chin (shoulders/chest) whose vertical movement shows breathing; null if it isn't in view
+function chestBoxFor(F,vw,vh){
+  if(!vw||!F.present||F.fallback||!F.fw)return null;
+  const y0=F.cy+.85*F.fw,x0=Math.max(0,F.cx-1.3*F.fw),x1=Math.min(vw,F.cx+1.3*F.fw),sc=320/vw;
+  if((vh-y0)*sc<16||(x1-x0)*sc<60)return null;
+  return {x0,x1,y0,y1:vh};
+}
 // mean skin-ish R,G,B over the ROIs
 function sampleFrame(now,vw,vh){
   const F=S.face;
@@ -641,6 +747,20 @@ function sampleFrame(now,vw,vh){
       per.forEach((v,i)=>{D.rois[i].r.push(v[0]);D.rois[i].g.push(v[1]);D.rois[i].b.push(v[2])});
       if(bgv!=null)S.bgLast=bgv;
       D.bg.push(S.bgLast||0);   // 0 = "no background available yet"; analysis ignores the reference if too many are missing
+      // shoulder/chest strip (locked at scan start): how far did its rows move vertically since the last frame?
+      let dv=0;
+      if(S.chestBox){
+        const q=S.chestBox,cx0=Math.round(q.x0*sc),cy0=Math.round(q.y0*sc);
+        const cw=Math.min(work.width-cx0,Math.round((q.x1-q.x0)*sc)),ch=Math.min(work.height-cy0,Math.round((q.y1-q.y0)*sc));
+        if(cw>=20&&ch>=12){
+          const px=wctx.getImageData(cx0,cy0,cw,ch).data,rows=new Float64Array(ch);
+          for(let j=0;j<ch;j++){let s=0,o=j*cw*4;for(let i=0;i<cw;i++,o+=4)s+=px[o]*.3+px[o+1]*.59+px[o+2]*.11;rows[j]=s/cw}
+          const np=normProfile(rows);
+          if(np&&S.chestPrev&&S.chestPrev.length===np.length)dv=profileShift(S.chestPrev,np);
+          S.chestPrev=np;
+        }
+      }
+      D.chestV.push(dv);
       S.mtot++;if(F.speed>=.08)S.mbad++;
       if(now-S.lastLive>1000&&D.t.length>FS*12){
         S.lastLive=now;
@@ -652,10 +772,12 @@ function sampleFrame(now,vw,vh){
           // the on-screen live number is the median of the last few estimates, so it doesn't jump around
           if(a.quality>=25){(S.liveHist=S.liveHist||[]).push(a.hr);if(S.liveHist.length>7)S.liveHist.shift();S.liveHr=median(S.liveHist)}
         }
+        if(S.chestBox&&D.chestV.length>FS*12){const cr=chestResp(D.t,D.chestV);if(cr)S.liveChest=cr}
       }
     }
-    // after 30 s, keep going (up to 60 s) until the live signal is strong: more data averages out the noise
-    if(el>=WARM+SCAN_S&&((S.liveQ!=null&&S.liveQ>=60)||el>=WARM+SCAN_MAX))finishScan();
+    // after 30 s keep going while the pulse is weak (up to 60 s), or while a tracked breathing signal isn't convincing yet (up to 45 s)
+    const m=el-WARM;
+    if(m>=SCAN_MAX||(m>=SCAN_S&&S.liveQ!=null&&S.liveQ>=60&&(!S.chestBox||solid(S.liveChest)||m>=RESP_MAX)))finishScan();
   }
 }
 
@@ -699,12 +821,16 @@ function updateUi(now){
   const c=chipState();
   const set=(id,label,v)=>{const e=$(id);e.className='chip '+v[0];e.innerHTML=label+'<b>'+v[1]+'</b>'};
   set('#cFace','Face',c.face);set('#cLight','Light',c.light);set('#cSteady','Steady',c.steady);set('#cSignal','Signal',c.signal);
-  let hint='Looks good. Hold steady.';
-  if(!S.face.present)hint='Move your face into the oval';
-  else if(c.light[1]==='Too dark'||c.light[1]==='Dim')hint='More light on your face: face a window or lamp';
-  else if(c.light[1]==='Too bright')hint='Too bright: avoid direct glare or sun on your face';
-  else if(c.steady[0]==='bad')hint='Hold still. Prop the phone on a surface if you can.';
+  let hint=you('Looks good. Hold steady.','Looks good. Ask them to hold still.');
+  if(!S.face.present)hint=you('Move your face into the oval','Ask them to move their face into the oval');
+  else if(c.light[1]==='Too dark'||c.light[1]==='Dim')hint=you('More light on your face: face a window or lamp','More light on their face: a window or lamp in front of them');
+  else if(c.light[1]==='Too bright')hint=you('Too bright: avoid direct glare or sun on your face','Too bright: avoid direct glare or sun on their face');
+  else if(c.steady[0]==='bad')hint=you('Hold still. Prop the phone on a surface if you can.','Ask them to hold still. Prop the phone on a surface if you can.');
   $('#hint').textContent=hint;
+  if(!S.scanning){
+    const cb=chestBoxFor(S.face,video.videoWidth,video.videoHeight);
+    $('#dbg').textContent=!S.face.present?'':cb?'Shoulders in view ✓ breathing will be measured':you('Tip: sit back a little so your shoulders are in view. Breathing is read from them.','Tip: have them sit back a little so their shoulders are in view.');
+  }
   // hands-free start: begin on its own once face, light and stillness have been OK for 1.5 s
   if(S.running&&!S.scanning){
     if(S.face.present&&c.all!=='bad'&&S.mpState!=='loading'){
@@ -719,13 +845,14 @@ function updateUi(now){
     const el=(now-S.tStart)/1000;
     if(el<WARM){$('#phase').textContent='Settling camera…';$('#clock').textContent='';$('#prog').style.width='0%'}
     else{
-      const m=el-WARM,ext=m>SCAN_S;
-      $('#phase').textContent=ext?'Signal still weak: measuring a bit longer':'Measuring';
-      $('#clock').textContent=Math.max(0,Math.ceil((ext?SCAN_MAX:SCAN_S)-m))+' s';
-      $('#prog').style.width=clamp(ext?(m-SCAN_S)/(SCAN_MAX-SCAN_S)*100:m/SCAN_S*100,0,100)+'%';
+      const m=el-WARM,ext=m>SCAN_S,pulseOk=S.liveQ!=null&&S.liveQ>=60,lim=ext?(pulseOk?RESP_MAX:SCAN_MAX):SCAN_S;
+      $('#phase').textContent=ext?(pulseOk?'Checking breathing a little longer':'Signal still weak: measuring a bit longer'):'Measuring';
+      $('#clock').textContent=Math.max(0,Math.ceil(lim-m))+' s';
+      $('#prog').style.width=clamp(ext?(m-SCAN_S)/Math.max(1,lim-SCAN_S)*100:m/SCAN_S*100,0,100)+'%';
     }
     const D=S.data,recent=D.t.filter(t=>now-t<3000).length;
-    $('#dbg').textContent=(recent/3).toFixed(0)+' fps · '+(S.liveQ==null?'quality …':'quality '+S.liveQ+' · stability '+Math.round((S.liveCons||0)*100)+'%');
+    const chestTxt=!S.chestBox?'shoulders not in view':solid(S.liveChest)?'breathing ~'+Math.round(S.liveChest.rr)+'/min':'tracking shoulders…';
+    $('#dbg').textContent=(recent/3).toFixed(0)+' fps · '+(S.liveQ==null?'quality …':'quality '+S.liveQ+' · stability '+Math.round((S.liveCons||0)*100)+'%')+' · '+chestTxt;
     if(S.liveHr&&S.liveQ!=null&&S.liveQ>=25){
       $('#liveHr').innerHTML=Math.round(S.liveHr)+'<small>bpm</small>';$('#liveNote').textContent='live estimate, refining';
     }else{$('#liveHr').innerHTML='--<small>bpm</small>';$('#liveNote').textContent=el<WARM?'settling':'reading pulse…'}
@@ -749,7 +876,7 @@ async function startFlow(){
 }
 function resetScan(){
   S.scanning=false;S.okSince=0;S.data=newData();S.gaps=0;S.liveQ=null;S.liveCons=null;S.liveHr=null;S.liveHist=[];S.bgLast=null;S.lastLive=0;
-  S.hp={ema:null,ring:[]};
+  S.hp={ema:null,ring:[]};S.chestBox=null;S.chestPrev=null;S.liveChest=null;
   $('#prog').style.width='0%';$('#phase').textContent='Ready';$('#clock').textContent='';
   $('#liveHr').innerHTML='--<small>bpm</small>';$('#liveNote').textContent='waiting…';
   $('#goBtn').textContent='Begin 30 s scan';
@@ -757,6 +884,8 @@ function resetScan(){
 function beginScan(){
   if(!S.face.present)return;
   S.data=newData();S.gaps=0;S.mbad=0;S.mtot=0;S.liveQ=null;S.liveCons=null;S.liveHr=null;S.liveHist=[];S.bgLast=null;S.lastLive=0;
+  S.chestBox=chestBoxFor(S.face,video.videoWidth,video.videoHeight);S.chestPrev=null;S.liveChest=null;
+  S.person=curPerson();
   S.tStart=performance.now();S.scanning=true;
   $('#goBtn').disabled=true;$('#goBtn').textContent='Scanning…';
 }
@@ -768,7 +897,7 @@ function finishScan(){
   if(a&&S.mtot&&S.mbad/S.mtot>.1)a.hrvReliable=false;
   const total=Math.max(SCAN_S,D.t.length?(S.lastT-D.t[0])/1000:SCAN_S),coverage=a?clamp(1-S.gaps/total,0,1):0;
   closeCamera();
-  S.result={a,coverage,at:Date.now()};
+  S.result={a,coverage,at:Date.now(),person:S.person||ME};
   show('result');   // show first: the waveform canvas needs a real size to draw
   renderResult();
 }
@@ -807,6 +936,12 @@ function renderResult(){
   $('#shareBtn').style.display='';
   const hp=pillFor(a.quality),rp=pillFor(a.rrQuality);
   const rrOk=a.rrQuality>=40;
+  const P=S.result.person||ME,N=NORMS[P.grp]||NORMS.adult;
+  const d=a.rrDetail||{},parts=[];
+  if(d.movement!=null)parts.push('shoulders '+Math.round(d.movement));
+  if(d.colour!=null)parts.push('skin colour '+Math.round(d.colour));
+  if(d.timing!=null)parts.push('beat timing '+Math.round(d.timing));
+  const rrNote=(rrOk?'':(d.movement==null?(you('Shoulders were not in view. Sit back a little. ','Shoulders were not in view. Have them sit back a little. ')):'Methods did not agree. '))+(parts.length?'Readings: '+parts.join(' · ')+' /min':'');
   let hrvCard='';
   if(a.hrv&&a.hrvReliable){
     const sl=stressLabel(a.stress);
@@ -822,25 +957,36 @@ function renderResult(){
   }else{
     hrvCard=`<div class="stat wide"><div class="k">HRV &amp; stress</div><div class="s" style="margin-top:6px">Beat timing wasn't clean enough for a trustworthy HRV. Retry with steadier, brighter conditions.</div></div>`;
   }
-  el.innerHTML=`<div class="grid">
+  el.innerHTML=`${P.id!=='me'?`<div class="note" style="margin:0 0 10px;font-size:13px">Scan for <b style="color:var(--text)">${esc(P.name)}</b></div>`:''}<div class="grid">
     <div class="stat"><div class="k">Heart rate</div><div class="v">${Math.round(a.hr)}<small>bpm</small></div>
-      <div class="s">Typical resting adult: 60–100</div><span class="pill ${hp[0]}">${hp[1]}</span>
+      <div class="s">${N.label}: ${N.hr}</div><span class="pill ${hp[0]}">${hp[1]}</span>
       ${a.quality<35?'<div class="s" style="color:var(--warn);margin-top:6px">Rough estimate. Rescan with the phone propped steady.</div>':''}
       ${a.flicker?`<div class="s" style="color:var(--warn);margin-top:6px">Ignored a steady ${a.flicker} bpm rhythm that also shows in the background: lighting flicker, not your pulse.</div>`:''}</div>
     <div class="stat"><div class="k">Respiration</div><div class="v">${rrOk?Math.round(a.rr):'--'}<small>/min</small></div>
-      <div class="s">Typical resting adult: 12–20</div><span class="pill ${rrOk?rp[0]:'bad'}">${rrOk?rp[1]:'Not reliable'}</span></div>
+      <div class="s">${N.label}: ${N.rr}</div><span class="pill ${rrOk?rp[0]:'bad'}">${rrOk?rp[1]:'Not confirmed'}</span>
+      ${rrNote?`<div class="s" style="margin-top:6px">${rrNote}</div>`:''}</div>
     ${hrvCard}
     <div class="stat wide"><div class="k">Pulse waveform · last 10 s</div><canvas class="wave" id="resWave" style="margin-top:8px"></canvas>
       <div class="s" style="margin-top:6px">Signal quality ${a.quality}/100 · stability ${Math.round(a.cons*100)}% · coverage ${Math.round(S.result.coverage*100)}% · ${a.beats} beats detected</div></div>
   </div>
-  <div class="grid"><div class="stat wide"><div class="k">Compare with your reference</div>
-    <input id="refIn" type="number" inputmode="numeric" placeholder="Google Fit / watch bpm" style="width:100%;margin-top:8px;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card2);color:var(--text);font-size:16px">
-    <div class="s" id="refOut" style="margin-top:6px">Type the reading from Google Fit or a watch taken at the same time.</div></div></div>
+  <div class="grid"><div class="stat wide"><div class="k">Compare with a reference</div>
+    <input id="refIn" class="refin" type="number" inputmode="numeric" placeholder="Heart rate: Google Fit / watch bpm">
+    <div class="s" id="refOut" style="margin-top:6px">Type the reading from Google Fit or a watch taken at the same time.</div>
+    <input id="refRr" class="refin" type="number" inputmode="numeric" placeholder="Breaths/min: counted for 30 s ×2, or from Fit">
+    <div class="s" id="refRrOut" style="margin-top:6px">Tip: watch the chest for 30 seconds, count breaths, double it.</div></div></div>
   <p class="disc">Camera-based estimates vary with lighting, motion and skin tone, and are not diagnostic. If you feel unwell or a reading worries you, talk to a doctor.</p>`;
   drawWave($('#resWave'),a.pulse,a.peakTimes,a.fs);
   S.result.summary={t:Date.now(),hr:Math.round(a.hr),rr:rrOk?Math.round(a.rr):null,
-    rmssd:a.hrv&&a.hrvReliable?Math.round(a.hrv.rmssd):null,stress:a.hrv&&a.hrvReliable?a.stress:null,q:a.quality};
+    rmssd:a.hrv&&a.hrvReliable?Math.round(a.hrv.rmssd):null,stress:a.hrv&&a.hrvReliable?a.stress:null,q:a.quality,
+    p:P.id,rrRaw:Math.round(a.rr),rrSrc:a.rrSrc};
   saveHistory(S.result.summary);
+  $('#refRr').oninput=e=>{
+    const v=parseInt(e.target.value,10),sm=S.result.summary;
+    if(!(v>=4&&v<=60)){sm.refRr=null;$('#refRrOut').textContent='Tip: watch the chest for 30 seconds, count breaths, double it.';return}
+    sm.refRr=v;const shown=sm.rr!=null?sm.rr:sm.rrRaw,dd=shown-v;
+    $('#refRrOut').textContent='App '+shown+(sm.rr!=null?'':' (not confirmed)')+' vs reference '+v+': '+(dd>=0?'+':'')+dd+' /min'+(Math.abs(dd)<=2?' (close)':'');
+    try{const h=loadHistory();if(h.length&&h[0].t===sm.t){h[0].refRr=v;localStorage.setItem(HK,JSON.stringify(h))}}catch(_){}
+  };
   $('#refIn').oninput=e=>{
     const v=parseInt(e.target.value,10),sm=S.result.summary;
     if(!(v>=30&&v<=220)){sm.ref=null;$('#refOut').textContent='Type the reading from Google Fit or a watch taken at the same time.';return}
@@ -850,22 +996,47 @@ function renderResult(){
   };
 }
 
+/* ───────────── people: scan yourself or someone else ───────────── */
+const PK='nadi.people.v1',WK='nadi.who.v1';
+const ME={id:'me',name:'Me',grp:'adult'};
+const NORMS={adult:{label:'Typical resting adult',hr:'60–100',rr:'12–20'},child:{label:'Typical for a child (6–12)',hr:'70–120',rr:'18–30'}};
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function loadPeople(){try{const l=JSON.parse(localStorage.getItem(PK)||'[]');return [ME,...(Array.isArray(l)?l:[])]}catch(e){return [ME]}}
+function savePeople(l){try{localStorage.setItem(PK,JSON.stringify(l.filter(p=>p.id!=='me')))}catch(e){}}
+let who='me';try{who=localStorage.getItem(WK)||'me'}catch(e){}
+if(!loadPeople().some(p=>p.id===who))who='me';
+const curPerson=()=>loadPeople().find(p=>p.id===who)||ME;
+const you=(a,b)=>who==='me'?a:b;
+let newGrp='adult',rmArm=0;
+function setWho(id){who=id;try{localStorage.setItem(WK,id)}catch(e){}renderWho();renderHistory()}
+function renderWho(){
+  const box=$('#whoChips');
+  box.innerHTML=loadPeople().map(p=>`<button class="pchip${p.id===who?' on':''}" data-id="${esc(p.id)}">${esc(p.name)}</button>`).join('')+'<button class="pchip add" id="pAdd">+ Add person</button>';
+  box.querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>setWho(b.dataset.id));
+  $('#pAdd').onclick=()=>{$('#addForm').style.display='block';$('#pName').focus()};
+  const p=curPerson(),rm=$('#rmPerson');
+  $('#startBtn').textContent=p.id==='me'?'Start scan':'Start scan for '+p.name;
+  rm.style.display=p.id==='me'?'none':'block';rm.textContent='Remove '+p.name;rmArm=0;
+}
+
 /* ───────────── history + share ───────────── */
 const HK='nadi.history.v1';
 function loadHistory(){try{return JSON.parse(localStorage.getItem(HK)||'[]')}catch(e){return[]}}
-function saveHistory(s){try{const h=loadHistory();h.unshift(s);localStorage.setItem(HK,JSON.stringify(h.slice(0,20)))}catch(e){}}
+function saveHistory(s){try{const h=loadHistory();h.unshift(s);localStorage.setItem(HK,JSON.stringify(h.slice(0,80)))}catch(e){}}
 function renderHistory(){
-  const h=loadHistory().slice(0,8),card=$('#histCard');
+  const h=loadHistory().filter(r=>(r.p||'me')===who).slice(0,8),card=$('#histCard');
+  $('#histTitle').textContent=who==='me'?'Recent scans':'Recent scans · '+curPerson().name;
   if(!h.length){card.style.display='none';return}
   card.style.display='';
   $('#histList').innerHTML=h.map(r=>{
     const d=new Date(r.t),ds=d.toLocaleDateString(undefined,{day:'numeric',month:'short'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
-    return `<div class="hist"><span>${ds}</span><span>${r.hr} bpm${r.ref?' (ref '+r.ref+')':''}${r.rr?' · '+r.rr+'/min':''}${r.rmssd?' · '+r.rmssd+' ms':''}</span></div>`;
+    return `<div class="hist"><span>${ds}</span><span>${r.hr} bpm${r.ref?' (ref '+r.ref+')':''}${r.rr?' · '+r.rr+'/min'+(r.refRr?' (ref '+r.refRr+')':''):''}${r.rmssd?' · '+r.rmssd+' ms':''}</span></div>`;
   }).join('');
 }
 async function share(){
   const s=S.result&&S.result.summary;if(!s)return;
-  const text=`NĀḌĪ face scan: HR ${s.hr} bpm${s.rr?', resp '+s.rr+'/min':''}${s.rmssd?', HRV (RMSSD) '+s.rmssd+' ms':''}. Wellness estimate, not a diagnosis.`;
+  const P=S.result.person||ME;
+  const text=`NĀḌĪ face scan${P.id!=='me'?' for '+P.name:''}: HR ${s.hr} bpm${s.rr?', resp '+s.rr+'/min':''}${s.rmssd?', HRV (RMSSD) '+s.rmssd+' ms':''}. Wellness estimate, not a diagnosis.`;
   try{if(navigator.share)await navigator.share({title:'NĀḌĪ scan',text});else await navigator.clipboard.writeText(text)}catch(e){}
 }
 
@@ -876,7 +1047,25 @@ $('#cancelBtn').onclick=cancelScan;
 $('#againBtn').onclick=startFlow;
 $('#homeBtn').onclick=()=>{show('home');renderHistory()};
 $('#shareBtn').onclick=share;
-$('#clearHist').onclick=()=>{try{localStorage.removeItem(HK)}catch(e){}renderHistory()};
+$('#clearHist').onclick=()=>{try{localStorage.setItem(HK,JSON.stringify(loadHistory().filter(r=>(r.p||'me')!==who)))}catch(e){}renderHistory()};
+$('#gAdult').onclick=()=>{newGrp='adult';$('#gAdult').classList.add('on');$('#gChild').classList.remove('on')};
+$('#gChild').onclick=()=>{newGrp='child';$('#gChild').classList.add('on');$('#gAdult').classList.remove('on')};
+$('#pCancel').onclick=()=>{$('#addForm').style.display='none'};
+$('#pSave').onclick=()=>{
+  const name=$('#pName').value.trim().slice(0,24);if(!name)return;
+  const l=loadPeople().filter(p=>p.id!=='me'),id='p'+Date.now().toString(36);
+  l.push({id,name,grp:newGrp});savePeople(l);
+  $('#pName').value='';$('#addForm').style.display='none';setWho(id);
+};
+$('#rmPerson').onclick=()=>{
+  if(who==='me')return;
+  const rm=$('#rmPerson'),id=who;
+  if(!rmArm){rmArm=1;rm.textContent='Tap again to remove '+curPerson().name+' and their scans';setTimeout(()=>{if(who===id){rmArm=0;rm.textContent='Remove '+curPerson().name}},4000);return}
+  savePeople(loadPeople().filter(p=>p.id!=='me'&&p.id!==id));
+  try{localStorage.setItem(HK,JSON.stringify(loadHistory().filter(r=>(r.p||'me')!==id)))}catch(e){}
+  setWho('me');
+};
+renderWho();
 renderHistory();
 </script>
 </body>
