@@ -42,6 +42,7 @@ footer{margin-top:18px;text-align:center;font-size:11px;color:#5d7287}
 .pchips{display:flex;flex-wrap:wrap;gap:8px}
 .pchip{appearance:none;border:1px solid var(--line);background:var(--card2);color:var(--text);padding:9px 14px;border-radius:99px;font-size:14px;font-weight:600;cursor:pointer}
 .pchip.on{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#05231d;border-color:transparent}
+.cam.rear video,.cam.rear canvas{transform:none}
 .pchip.add{color:var(--accent);border-style:dashed}
 .seg.on{border-color:var(--accent);color:var(--accent)}
 .refin{width:100%;margin-top:8px;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card2);color:var(--text);font-size:16px}
@@ -126,6 +127,9 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
         <p class="note" style="margin:8px 0">Only scan someone with their OK. Not meant for babies. Names stay on this phone.</p>
         <div class="row"><button class="btn ghost" id="pCancel" style="padding:10px;font-size:14px">Cancel</button><button class="btn" id="pSave" style="padding:10px;font-size:14px">Add</button></div>
       </div>
+      <div style="margin-top:14px"><div class="note" style="margin:0 0 6px">Camera</div>
+        <div class="row"><button class="btn ghost seg" id="camFront" style="padding:10px;font-size:14px">Front (selfie)</button><button class="btn ghost seg" id="camRear" style="padding:10px;font-size:14px">Rear (scan others)</button></div>
+        <p class="note" id="camNote" style="margin:6px 0 0">The rear camera also has a light for dim rooms.</p></div>
       <button class="btn ghost" id="rmPerson" style="display:none;margin-top:10px;padding:10px;font-size:13px"></button>
     </div>
     <button class="btn" id="startBtn">Start scan</button>
@@ -158,7 +162,11 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <canvas class="wave" id="liveWave" width="400" height="70"></canvas>
     <div class="bar"><i id="prog"></i></div>
     <div class="timer"><span id="phase">Ready</span><span id="clock"></span></div>
-    <div class="row" style="margin-top:12px">
+    <div class="row" style="margin-top:10px">
+      <button class="btn ghost" id="flipBtn" style="padding:10px;font-size:14px">Switch camera</button>
+      <button class="btn ghost" id="torchBtn" style="padding:10px;font-size:14px;display:none">Light: off</button>
+    </div>
+    <div class="row" style="margin-top:10px">
       <button class="btn ghost" id="cancelBtn">Cancel</button>
       <button class="btn" id="goBtn" disabled>Begin 30 s scan</button>
     </div>
@@ -174,7 +182,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v11</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v12</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -579,7 +587,7 @@ const MP_BASE='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@'+MP_VER;
 const MP_MODEL='https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
 const video=$('#video'),overlay=$('#overlay'),work=$('#work'),wctx=work.getContext('2d',{willReadFrequently:true}),octx=overlay.getContext('2d');
-const S={running:false,scanning:false,stream:null,landmarker:null,mpState:'idle',frame:0,lastVT:-1,
+const S={facing:(()=>{try{return localStorage.getItem('nadi.cam')==='environment'?'environment':'user'}catch(e){return'user'}})(),torchOn:false,torchOK:false,torchUser:null,running:false,scanning:false,stream:null,landmarker:null,mpState:'idle',frame:0,lastVT:-1,
   face:{present:false,rois:[],fw:0,cx:0,cy:0,speed:0,seen:0,fallback:false},
   bri:128,sat:0,tStart:0,data:newData(),gaps:0,mbad:0,mtot:0,lastT:0,
   hp:{ema:null,ring:[]},liveQ:null,liveCons:null,liveHr:null,lastLive:0,lastUi:0,result:null};
@@ -638,8 +646,16 @@ function fallbackFace(now,vw,vh){
 
 /* ───────────── camera + frame loop ───────────── */
 async function openCamera(){
-  S.stream=await navigator.mediaDevices.getUserMedia({
-    video:{facingMode:'user',width:{ideal:640},height:{ideal:480},frameRate:{ideal:30}},audio:false});
+  const want=S.facing==='environment'?'environment':'user';
+  const get=f=>navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:f},width:{ideal:640},height:{ideal:480},frameRate:{ideal:30}},audio:false});
+  S.stream=await get(want);
+  // what we actually got (a phone without a rear camera, or a desktop, may give the front one)
+  const trk=S.stream.getVideoTracks()[0],st=(trk&&trk.getSettings&&trk.getSettings())||{};
+  const rear=st.facingMode?st.facingMode==='environment':want==='environment';
+  $('#cam').classList.toggle('rear',rear);
+  S.torchOn=false;S.torchOK=false;
+  try{const cap=trk.getCapabilities&&trk.getCapabilities();S.torchOK=!!(cap&&cap.torch)}catch(e){}
+  updTorchBtn();
   video.srcObject=S.stream;
   await video.play().catch(()=>{});
   await new Promise(r=>{if(video.videoWidth)r();else video.onloadedmetadata=()=>r()});
@@ -647,7 +663,17 @@ async function openCamera(){
   const dpr=window.devicePixelRatio||1,r=$('#cam').getBoundingClientRect();
   overlay.width=Math.round(r.width*dpr);overlay.height=Math.round(r.height*dpr);
 }
+async function setTorch(on){
+  const trk=S.stream&&S.stream.getVideoTracks()[0];
+  if(!trk||!S.torchOK)return false;
+  try{await trk.applyConstraints({advanced:[{torch:!!on}]});S.torchOn=!!on;updTorchBtn();return true}catch(e){return false}
+}
+function updTorchBtn(){
+  const b=$('#torchBtn');if(!b)return;
+  b.style.display=S.torchOK?'':'none';b.textContent='Light: '+(S.torchOn?'on':'off');
+}
 function closeCamera(){
+  S.torchOn=false;S.torchOK=false;
   S.running=false;
   if(S.stream){S.stream.getTracks().forEach(t=>t.stop());S.stream=null}
   video.srcObject=null;
@@ -843,10 +869,17 @@ function updateUi(now){
   set('#cFace','Face',c.face);set('#cLight','Light',c.light);set('#cSteady','Steady',c.steady);set('#cSignal','Signal',c.signal);
   let hint=you('Looks good. Hold steady.','Looks good. Ask them to hold still.');
   if(!S.face.present)hint=you('Fit your face in the oval, with your shoulders below it','Ask them to move their face into the oval');
+  else if((c.light[1]==='Too dark'||c.light[1]==='Dim')&&S.torchOK)hint='Dim: the camera light is on to help. Keep going.';
+  else if((c.light[1]==='Too dark'||c.light[1]==='Dim')&&!S.torchOK&&S.facing==='user')hint=you('More light on your face: face a window or lamp. The rear camera has a light too (Switch camera).','More light on their face: a window or lamp in front of them, or Switch camera to the rear one, which has a light.');
   else if(c.light[1]==='Too dark'||c.light[1]==='Dim')hint=you('More light on your face: face a window or lamp','More light on their face: a window or lamp in front of them');
   else if(c.light[1]==='Too bright')hint=you('Too bright: avoid direct glare or sun on your face','Too bright: avoid direct glare or sun on their face');
   else if(c.steady[0]==='bad')hint=you('Hold still. Prop the phone on a surface if you can.','Ask them to hold still. Prop the phone on a surface if you can.');
   $('#hint').textContent=hint;
+  // camera light: switch on by itself in dim light before the scan (unless the person turned it off), off again if it glares
+  if(S.torchOK&&!S.scanning&&S.frame>20){
+    if(!S.torchOn&&S.torchUser!==false&&S.bri<80&&!S.torchBusy){S.torchBusy=1;setTorch(true).finally(()=>{S.torchBusy=0;S.bri=Math.max(S.bri,80)})}
+    else if(S.torchOn&&S.torchUser!==true&&S.bri>205&&!S.torchBusy){S.torchBusy=1;setTorch(false).finally(()=>{S.torchBusy=0})}
+  }
   if(!S.scanning){
     const cb=chestBoxFor(S.face,video.videoWidth,video.videoHeight),plain=S.chestRho!=null&&S.chestRho<CH_RHO;
     $('#dbg').textContent=!S.face.present?'':!cb?you('Tip: sit back a little so your shoulders are in view. Breathing is read from them.','Tip: have them sit back a little so their shoulders are in view.')
@@ -1068,6 +1101,12 @@ async function share(){
 
 /* ───────────── wiring ───────────── */
 $('#startBtn').onclick=startFlow;
+function setFacing(f){S.facing=f;try{localStorage.setItem('nadi.cam',f)}catch(e){}
+  $('#camFront').classList.toggle('on',f==='user');$('#camRear').classList.toggle('on',f==='environment');
+  $('#camNote').textContent=f==='environment'?'Rear camera: the other person sits facing you while you hold or prop the phone. Its light turns on in dim rooms.':'Front camera: you see yourself on screen. The rear camera has a light for dim rooms.'}
+$('#camFront').onclick=()=>setFacing('user');$('#camRear').onclick=()=>setFacing('environment');setFacing(S.facing);
+$('#flipBtn').onclick=async()=>{if(S.scanning)return;closeCamera();setFacing(S.facing==='user'?'environment':'user');S.torchUser=null;await startFlow()};
+$('#torchBtn').onclick=async()=>{if(S.scanning)return;const on=!S.torchOn;S.torchUser=on;await setTorch(on)};
 $('#goBtn').onclick=beginScan;
 $('#cancelBtn').onclick=cancelScan;
 $('#againBtn').onclick=startFlow;
