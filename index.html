@@ -174,7 +174,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v10</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v11</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -630,7 +630,7 @@ function updateFace(res,now,vw,vh){
   }else if(now-F.seen>700){F.present=false;F.rois=[];F.speed=0;F.hist=[]}
 }
 function fallbackFace(now,vw,vh){
-  const F=S.face,fw=.42*Math.min(vw,vh*.75),cx=vw/2,cy=vh*.36;
+  const F=S.face,fw=.5*Math.min(vw,vh*.75),cx=vw/2,cy=vh*.37;
   const k=.2*fw;
   F.rois=[{cx,cy:cy-.45*fw,w:.5*fw,h:.17*fw},{cx:cx-.28*fw,cy:cy+.12*fw,w:k,h:k},{cx:cx+.28*fw,cy:cy+.12*fw,w:k,h:k}];
   F.fw=fw;F.cx=cx;F.cy=cy;F.present=true;F.seen=now;F.fallback=true;F.speed=0;
@@ -809,7 +809,7 @@ function drawOverlay(vw,vh){
   octx.lineWidth=3*(window.devicePixelRatio||1);
   octx.setLineDash([10,8]);
   octx.strokeStyle=S.scanning?'rgba(53,224,193,.85)':(good?'rgba(53,224,193,.6)':'rgba(255,255,255,.45)');
-  octx.beginPath();octx.ellipse(W/2,Hh*.36,W*.235,Hh*.25,0,0,Math.PI*2);octx.stroke();
+  octx.beginPath();octx.ellipse(W/2,Hh*.37,W*.28,Hh*.29,0,0,Math.PI*2);octx.stroke();
   octx.setLineDash([]);
   octx.lineWidth=2*(window.devicePixelRatio||1);
   octx.strokeStyle='rgba(124,240,218,.9)';
