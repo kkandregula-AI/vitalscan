@@ -182,7 +182,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v12</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v13</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -598,7 +598,9 @@ function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.to
 /* ───────────── MediaPipe face landmarks (on-device) ───────────── */
 async function initMP(){
   if(S.landmarker||S.mpState==='loading')return;
-  S.mpState='loading';
+  const retry=S.mpState==='fallback';   // a background retry must not disturb the running (manual-oval) scan
+  if(!retry)S.mpState='loading';
+  S.mpErr='';
   try{
     const mod=await import(MP_BASE+'/vision_bundle.mjs');
     const fileset=await mod.FilesetResolver.forVisionTasks(MP_BASE+'/wasm');
@@ -607,11 +609,13 @@ async function initMP(){
         S.landmarker=await mod.FaceLandmarker.createFromOptions(fileset,{
           baseOptions:{modelAssetPath:MP_MODEL,delegate},runningMode:'VIDEO',numFaces:1});
         break;
-      }catch(e){S.landmarker=null}
+      }catch(e){S.landmarker=null;S.mpErr=String(e&&e.message||e).slice(0,60)}
     }
+    if(S.landmarker&&retry&&S.scanning)S.landmarker=null;   // too late to switch mid-scan; the next scan will try again
     S.mpState=S.landmarker?'ready':'fallback';
-  }catch(e){S.mpState='fallback'}
-  $('#modeNote').textContent=S.mpState==='ready'?'face tracking on':'align face in oval';
+  }catch(e){S.mpState='fallback';S.mpErr=String(e&&e.message||e).slice(0,60)}
+  // a slow or flaky connection often succeeds on a second try: retry a few times in the background
+  if(S.mpState==='fallback'&&(S.mpTries=(S.mpTries||0)+1)<=3)setTimeout(()=>{if(S.mpState==='fallback'&&!S.scanning)initMP()},4000*S.mpTries);
 }
 
 function lm(l,i,vw,vh){return {x:l[i].x*vw,y:l[i].y*vh}}
@@ -734,7 +738,7 @@ function bgMean(sc,vw,vh){
 }
 // strip below the chin (shoulders/chest) whose vertical movement shows breathing; null if it isn't in view
 function chestBoxFor(F,vw,vh){
-  if(!vw||!F.present||F.fallback||!F.fw)return null;
+  if(!vw||!F.present||!F.fw)return null;   // also works with the fixed oval (manual mode): the person is asked to fit their face in it
   // starts just below the mouth, so it takes in chin, neck, collar and shirt (more to track than shirt alone)
   const y0=F.cy+.55*F.fw,x0=Math.max(0,F.cx-1.2*F.fw),x1=Math.min(vw,F.cx+1.2*F.fw),sc=320/vw;
   if((vh-y0)*sc<20||(x1-x0)*sc<60)return null;
@@ -865,6 +869,7 @@ function chipState(){
 }
 function updateUi(now){
   const c=chipState();
+  $('#modeNote').textContent=S.mpState==='ready'?'face tracking on':S.mpState==='loading'?'loading face tracking…':'face tracking unavailable: fit your face in the oval'+(S.mpErr?' ('+S.mpErr+')':'');
   const set=(id,label,v)=>{const e=$(id);e.className='chip '+v[0];e.innerHTML=label+'<b>'+v[1]+'</b>'};
   set('#cFace','Face',c.face);set('#cLight','Light',c.light);set('#cSteady','Steady',c.steady);set('#cSignal','Signal',c.signal);
   let hint=you('Looks good. Hold steady.','Looks good. Ask them to hold still.');
@@ -919,10 +924,9 @@ async function startFlow(){
   resetScan();
   $('#hint').textContent='Starting camera…';
   try{
-    initMP();
+    S.mpTries=0;initMP();
     await openCamera();
     S.running=true;S.lastVT=-1;S.frame=0;S.face={present:false,rois:[],fw:0,cx:0,cy:0,speed:0,seen:0,fallback:false};
-    $('#modeNote').textContent=S.mpState==='ready'?'face tracking on':'loading face tracking…';
     schedule();
   }catch(e){
     $('#hint').innerHTML='<span class="err">Camera unavailable. Allow camera access (needs HTTPS) and try again.</span>';
