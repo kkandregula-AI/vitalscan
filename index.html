@@ -174,7 +174,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v7</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v8</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -410,16 +410,22 @@ function respPeak(x,fs,lo,hi){
     return {a:(sy-b*sx)/c,b};
   };
   const f1=fit(null);
-  if(!f1)return {f:(lo+hi)/2,snrDb:-20};
-  let k=-1,best=-1e9;
+  if(!f1)return {f:(lo+hi)/2,snrDb:-20,peaks:[]};
+  // candidates must be true local maxima (higher than everything within ±0.03 Hz), not the shoulder of a slope running off
+  // the band edge: faster motion just above the band (tremor, a wobbly phone) otherwise masquerades as a "breathing peak"
+  const cands=[];
   for(let i=0;i<n;i++){
-    if(sp.f[i]<lo+0.025||sp.f[i]>hi-0.025)continue;
-    const r=lp[i]-(f1.a+f1.b*sp.f[i]);
-    if(r>best){best=r;k=i}
+    if(sp.f[i]<lo+0.025||sp.f[i]>hi-0.05)continue;
+    let top=true;
+    for(let j=Math.max(0,i-6);j<=Math.min(n-1,i+6);j++)if(sp.P[j]>sp.P[i]){top=false;break}
+    if(top)cands.push({i,r:lp[i]-(f1.a+f1.b*sp.f[i])});
   }
-  if(k<0)return {f:(lo+hi)/2,snrDb:-20};
-  const f2=fit(sp.f[k])||f1;
-  return {f:sp.f[k],snrDb:(lp[k]-(f2.a+f2.b*sp.f[k]))*4.3429};
+  if(!cands.length)return {f:(lo+hi)/2,snrDb:-20,peaks:[]};
+  cands.sort((a,b)=>b.r-a.r);
+  const k=cands[0].i,f2=fit(sp.f[k])||f1;
+  const peaks=[];
+  for(const c of cands){if(peaks.every(p=>Math.abs(p.f-sp.f[c.i])>=0.05)&&peaks.length<3)peaks.push({f:sp.f[c.i],rr:sp.f[c.i]*60,snrDb:c.r*4.3429})}
+  return {f:sp.f[k],snrDb:(lp[k]-(f2.a+f2.b*sp.f[k]))*4.3429,peaks};
 }
 // respPeak on the whole record + "does the same rate show up in every 16 s stretch?" (noise peaks wander, breathing doesn't)
 function respPeakStable(x,fs,lo,hi){
@@ -459,7 +465,7 @@ function chestResp(t,v){
   const x=resample(t,pos,FS);
   const f=bandpass(detrend(x),FS,0.1,0.6);
   const pk=respPeakStable(f,FS,0.12,0.55);
-  return {rr:pk.f*60,snrDb:pk.snrDb,cons:pk.cons,amp:stdev(f)};
+  return {rr:pk.f*60,snrDb:pk.snrDb,cons:pk.cons,amp:stdev(f),peaks:pk.peaks||[],trace:f};
 }
 // S: {t:[ms], r:[], g:[], b:[], rois:[{r,g,b}], bg:[], chestV:[]} ROI means per frame
 function analyze(S,opts={}){
@@ -535,7 +541,9 @@ function analyze(S,opts={}){
     const best=b&&b.snrDb>a.snrDb?b:a;rr=best.rr;rq=Math.min(30,q01(best),out.quality);src='colour (unconfirmed)';
   }
   out.rr=rr;out.rrQuality=rq;out.rrSrc=src;
-  out.rrDetail={movement:c?c.rr:null,colour:a.rr,timing:b?b.rr:null,movementSnr:c?c.snrDb:null};
+  out.rrDetail={movement:c?c.rr:null,colour:a.rr,timing:b?b.rr:null,movementSnr:c?c.snrDb:null,
+    movementPeaks:c?c.peaks.map(p=>({rr:p.rr,snrDb:p.snrDb})):[]};
+  out.chestTrace=c?c.trace:null;
   return out;
 }
 // ==DSP-END==
@@ -905,11 +913,11 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden&&S.scanning
 
 /* ───────────── results ───────────── */
 const pillFor=q=>q>=60?['ok','High confidence']:q>=35?['warn','Medium confidence']:['bad','Low confidence'];
-function drawWave(canvas,arr,peaks,fs){
+function drawWave(canvas,arr,peaks,fs,secs=10){
   const dpr=window.devicePixelRatio||1,w=canvas.clientWidth||360,h=canvas.clientHeight||70;
   canvas.width=w*dpr;canvas.height=h*dpr;
   const x=canvas.getContext('2d');x.scale(dpr,dpr);
-  const n=Math.min(arr.length,fs*10),off=arr.length-n;
+  const n=Math.min(arr.length,fs*secs),off=arr.length-n;
   let mx=1e-9;for(let i=0;i<n;i++)mx=Math.max(mx,Math.abs(arr[off+i]));
   x.strokeStyle='#35e0c1';x.lineWidth=2;x.lineJoin='round';x.beginPath();
   for(let i=0;i<n;i++){const px=i/(n-1)*w,py=h/2-(arr[off+i]/mx)*(h/2-8);i?x.lineTo(px,py):x.moveTo(px,py)}
@@ -941,7 +949,8 @@ function renderResult(){
   if(d.movement!=null)parts.push('shoulders '+Math.round(d.movement));
   if(d.colour!=null)parts.push('skin colour '+Math.round(d.colour));
   if(d.timing!=null)parts.push('beat timing '+Math.round(d.timing));
-  const rrNote=(rrOk?'':(d.movement==null?(you('Shoulders were not in view. Sit back a little. ','Shoulders were not in view. Have them sit back a little. ')):'Methods did not agree. '))+(parts.length?'Readings: '+parts.join(' · ')+' /min':'');
+  const rrNote=(rrOk?'':(d.movement==null?(you('Shoulders were not in view. Sit back a little. ','Shoulders were not in view. Have them sit back a little. ')):'Methods did not agree. '))+(parts.length?'Readings: '+parts.join(' · ')+' /min':'')
+    +(!rrOk&&d.movementPeaks&&d.movementPeaks.length?'. Shoulder peaks: '+d.movementPeaks.map(p=>Math.round(p.rr)+' ('+Math.round(p.snrDb)+' dB)').join(', '):'');
   let hrvCard='';
   if(a.hrv&&a.hrvReliable){
     const sl=stressLabel(a.stress);
@@ -968,6 +977,8 @@ function renderResult(){
     ${hrvCard}
     <div class="stat wide"><div class="k">Pulse waveform · last 10 s</div><canvas class="wave" id="resWave" style="margin-top:8px"></canvas>
       <div class="s" style="margin-top:6px">Signal quality ${a.quality}/100 · stability ${Math.round(a.cons*100)}% · coverage ${Math.round(S.result.coverage*100)}% · ${a.beats} beats detected</div></div>
+    ${a.chestTrace?`<div class="stat wide"><div class="k">Shoulder movement · last 30 s</div><canvas class="wave" id="resChest" style="margin-top:8px"></canvas>
+      <div class="s" style="margin-top:6px">Each slow wave should be one breath. A clean, regular wave means the breathing reading can be trusted.</div></div>`:''}
   </div>
   <div class="grid"><div class="stat wide"><div class="k">Compare with a reference</div>
     <input id="refIn" class="refin" type="number" inputmode="numeric" placeholder="Heart rate: Google Fit / watch bpm">
@@ -976,6 +987,7 @@ function renderResult(){
     <div class="s" id="refRrOut" style="margin-top:6px">Tip: watch the chest for 30 seconds, count breaths, double it.</div></div></div>
   <p class="disc">Camera-based estimates vary with lighting, motion and skin tone, and are not diagnostic. If you feel unwell or a reading worries you, talk to a doctor.</p>`;
   drawWave($('#resWave'),a.pulse,a.peakTimes,a.fs);
+  if(a.chestTrace&&$('#resChest'))drawWave($('#resChest'),a.chestTrace,null,a.fs,30);
   S.result.summary={t:Date.now(),hr:Math.round(a.hr),rr:rrOk?Math.round(a.rr):null,
     rmssd:a.hrv&&a.hrvReliable?Math.round(a.hrv.rmssd):null,stress:a.hrv&&a.hrvReliable?a.stress:null,q:a.quality,
     p:P.id,rrRaw:Math.round(a.rr),rrSrc:a.rrSrc};
