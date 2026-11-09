@@ -159,7 +159,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
       <div class="chip" id="cSignal">Signal<b>—</b></div>
     </div>
     <div class="hint" id="hint">Starting camera…</div>
-    <div class="note" id="dbg" style="text-align:center;margin:-6px 0 8px;min-height:16px"></div>
+    <div class="note" id="dbgLine" style="text-align:center;margin:-6px 0 8px;min-height:16px"></div>
     <canvas class="wave" id="liveWave" width="400" height="70"></canvas>
     <div class="bar"><i id="prog"></i></div>
     <div class="timer"><span id="phase">Ready</span><span id="clock"></span></div>
@@ -183,7 +183,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v16</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v17</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -855,7 +855,7 @@ function sampleFrame(now,vw,vh){
     if(S.prevSmall&&S.prevSmall.length===g.length){
       const r=gridShift(S.prevSmall,g,SW,x0,y0,x1,y1,R);
       mv=r.mad;
-      if(F.fallback&&mv>1.0&&Math.abs(r.dx)<R&&Math.abs(r.dy)<R){S.fbDx=clamp((S.fbDx||0)+r.dx/k,-.4*vw,.4*vw);S.fbDy=clamp((S.fbDy||0)+r.dy/k,-.3*vh,.35*vh)}
+      if(F.fallback&&(S.fbTapped||S.scanning)&&mv>1.0&&Math.abs(r.dx)<R&&Math.abs(r.dy)<R){S.fbDx=clamp((S.fbDx||0)+r.dx/k,-.4*vw,.4*vw);S.fbDy=clamp((S.fbDy||0)+r.dy/k,-.3*vh,.35*vh)}
     }
     S.prevSmall=g;
   }
@@ -1010,12 +1010,14 @@ function updateUi(now){
   }
   if(!S.scanning){
     const cb=chestBoxFor(S.face,video.videoWidth,video.videoHeight),plain=S.chestRho!=null&&S.chestRho<CH_RHO;
-    $('#dbg').textContent=!S.face.present?'':!cb?you('Tip: sit back a little so your shoulders are in view. Breathing is read from them.','Tip: have them sit back a little so their shoulders are in view.')
+    $('#dbgLine').textContent=!S.face.present?'':!cb?you('Tip: sit back a little so your shoulders are in view. Breathing is read from them.','Tip: have them sit back a little so their shoulders are in view.')
       :plain?'Shoulder area looks too plain to track. A top with a pattern or visible collar, or more light, helps.':'Shoulders in view ✓ breathing will be measured';
   }
   // hands-free start: begin on its own once face, light and stillness have been OK for 1.5 s
   if(S.running&&!S.scanning){
-    if(S.face.fallback&&!S.fbTapped&&S.mpState!=='loading'){S.okSince=0;$('#hint').textContent=you('Tap your face on the screen (on your nose) to place the boxes. The scan starts right after.','Tap their face on the screen (on the nose) to place the boxes. The scan starts right after.')}
+    if(S.face.fallback){S.manSince=S.manSince||now}else S.manSince=0;
+    const waitTap=S.face.fallback&&!S.fbTapped&&S.mpState!=='loading'&&now-S.manSince<6000;   // after 6 s we go with the oval as it is
+    if(waitTap){S.okSince=0;$('#hint').textContent=you('Tap your face on the screen (on your nose) to place the boxes. The scan starts right after.','Tap their face on the screen (on the nose) to place the boxes. The scan starts right after.')}
     else if(S.face.present&&c.all!=='bad'&&S.mpState!=='loading'){
       S.okSince=S.okSince||now;
       const left=1.5-(now-S.okSince)/1000;
@@ -1035,7 +1037,7 @@ function updateUi(now){
     }
     const D=S.data,recent=D.t.filter(t=>now-t<3000).length;
     const chestTxt=!S.chestBox?'shoulders not in view':S.chestRho==null?'checking shoulders…':S.chestRho<CH_RHO?'shoulder area too plain':solid(S.liveChest)?'breathing ~'+Math.round(S.liveChest.rr)+'/min':'tracking shoulders…';
-    $('#dbg').textContent=(recent/3).toFixed(0)+' fps · '+(S.liveQ==null?'quality …':'quality '+S.liveQ+' · stability '+Math.round((S.liveCons||0)*100)+'%')+' · '+chestTxt;
+    $('#dbgLine').textContent=(recent/3).toFixed(0)+' fps · '+(S.liveQ==null?'quality …':'quality '+S.liveQ+' · stability '+Math.round((S.liveCons||0)*100)+'%')+' · '+chestTxt;
     if(S.liveHr&&S.liveQ!=null&&S.liveQ>=25){
       $('#liveHr').innerHTML=Math.round(S.liveHr)+'<small>bpm</small>';$('#liveNote').textContent='live estimate, refining';
     }else{$('#liveHr').innerHTML='--<small>bpm</small>';$('#liveNote').textContent=el<WARM?'settling':'reading pulse…'}
@@ -1058,7 +1060,7 @@ async function startFlow(){
 }
 function resetScan(){
   S.scanning=false;S.okSince=0;S.data=newData();S.gaps=0;S.liveQ=null;S.liveCons=null;S.liveHr=null;S.liveHist=[];S.bgLast=null;S.lastLive=0;
-  S.fbDx=0;S.fbDy=0;S.fbTapped=0;S.cleanSec=null;S.expTried=0;S.prevSmall=null;S.hp={ema:null,ring:[]};S.chestBox=null;S.chestPrev=null;S.liveChest=null;S.chestRho=null;
+  S.fbDx=0;S.fbDy=0;S.fbTapped=0;S.manSince=0;S.cleanSec=null;S.expTried=0;S.prevSmall=null;S.hp={ema:null,ring:[]};S.chestBox=null;S.chestPrev=null;S.liveChest=null;S.chestRho=null;
   $('#prog').style.width='0%';$('#phase').textContent='Ready';$('#clock').textContent='';
   $('#liveHr').innerHTML='--<small>bpm</small>';$('#liveNote').textContent='waiting…';
   $('#goBtn').textContent='Begin 30 s scan';
