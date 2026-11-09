@@ -183,7 +183,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v17</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v18</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -388,12 +388,20 @@ function clipOutliers(x,k){
 function motionMask(mot,t,n){
   const m=new Float64Array(n).fill(1);
   if(!mot||mot.length<FS*4||!t||t.length!==mot.length)return {m,cleanFrac:1,cleanSec:n/FS};
-  const med=median(mot),thr=Math.max(1.2,3.5*med);
+  // phone cameras give 30-60 frames a second with ragged picture noise: look at a 0.3 s average, not single frames
+  const T=(t[t.length-1]-t[0])/1000,fps=mot.length/Math.max(T,1e-6),w=Math.max(1,Math.round(.3*fps));
+  const sm=new Float64Array(mot.length);{let acc=0;for(let i=0;i<mot.length;i++){acc+=mot[i];if(i>=w)acc-=mot[i-w];sm[i]=acc/Math.min(i+1,w)}}
+  const srt=Array.from(sm).sort((a,b)=>a-b),med=srt[srt.length>>1];
+  const mad=median(Array.from(sm,x=>Math.abs(x-med)))*1.4826;
+  let thr=Math.max(1.2,2.5*med,med+8*mad);
+  // never call more than 40% of the scan "movement": a constantly lively picture is a noisy camera, not a head in motion
+  const cap=srt[Math.floor(srt.length*.6)];if(thr<cap)thr=cap;
   const raw=new Float64Array(n);
-  const t0=t[0],T=(t[t.length-1]-t0)/1000;
-  for(let k=0;k<mot.length;k++){if(mot[k]>thr){const i=Math.round((t[k]-t0)/1000*(n-1)/Math.max(T,1e-6));if(i>=0&&i<n)raw[i]=1}}
-  const pad=Math.round(.5*FS);let bad=0;
-  for(let i=0;i<n;i++){let b=0;for(let j=Math.max(0,i-pad);j<=Math.min(n-1,i+pad)&&!b;j++)if(raw[j])b=1;if(b){m[i]=0;bad++}}
+  const t0=t[0];
+  for(let k=0;k<sm.length;k++){if(sm[k]>thr){const i=Math.round((t[k]-t0)/1000*(n-1)/Math.max(T,1e-6));if(i>=0&&i<n)raw[i]=1}}
+  const pad=Math.round(.3*FS);let bad=0;
+  const cs=new Int32Array(n+1);for(let i=0;i<n;i++)cs[i+1]=cs[i]+raw[i];
+  for(let i=0;i<n;i++){const lo=Math.max(0,i-pad),hi=Math.min(n-1,i+pad);if(cs[hi+1]-cs[lo]>0){m[i]=0;bad++}}
   return {m,cleanFrac:1-bad/n,cleanSec:(n-bad)/FS};
 }
 const inNotch=(f,notch)=>{for(const n of notch)if(Math.abs(f-n)<0.12)return true;return false};
@@ -711,6 +719,8 @@ function updateFace(res,now,vw,vh){
     const k=.2*fw;
     const rois=[fh,{cx:c1.x,cy:c1.y,w:k,h:k},{cx:c2.x,cy:c2.y,w:k,h:k}];
     const cx=(a.x+b.x)/2,cy=(a.y+b.y)/2;
+    const chin=lm(l,152,vw,vh),dx=chin.x-top.x,dy=chin.y-top.y;
+    F.oval={cx:(top.x+chin.x)/2,cy:(top.y+chin.y)/2,rx:.56*fw,ry:.56*Math.hypot(dx,dy),rot:Math.atan2(dy,dx)-Math.PI/2};   // follows the head, tilt included
     // "sway": largest excursion from the mean face position over the last 1.5 s, in face widths.
     // (Frame-to-frame speed was dominated by landmark jitter and never read as "still".)
     (F.hist=F.hist||[]).push({t:now,x:cx,y:cy});
@@ -953,7 +963,9 @@ function drawOverlay(vw,vh){
   // manual mode: the guide oval sits where the boxes are (centre = face position), so boxes always lie inside it
   const man=S.face.fallback&&S.face.fw;
   octx.beginPath();
-  if(man)octx.ellipse(S.face.cx*sx,S.face.cy*sy,.56*S.face.fw*sx,.77*S.face.fw*sx,0,0,Math.PI*2);
+  const fo=S.face.present&&!S.face.fallback&&S.face.oval;
+  if(fo)octx.ellipse(fo.cx*sx,fo.cy*sy,fo.rx*sx,fo.ry*sx,fo.rot,0,Math.PI*2);
+  else if(man)octx.ellipse(S.face.cx*sx,S.face.cy*sy,.56*S.face.fw*sx,.77*S.face.fw*sx,0,0,Math.PI*2);
   else octx.ellipse(W/2,Hh*.37,W*.28,Hh*.29,0,0,Math.PI*2);
   octx.stroke();
   octx.setLineDash([]);
