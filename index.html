@@ -183,7 +183,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v15</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v16</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -655,8 +655,9 @@ if('serviceWorker' in navigator&&location.protocol.startsWith('http')){navigator
 
 /* ───────────── state ───────────── */
 const WARM=3,SCAN_S=30,SCAN_MAX=60,RESP_MAX=45;
-const MP_VER='0.10.14';
-const MP_BASE='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@'+MP_VER;
+// several versions: some phones/Safari builds choke on one of them ("dbg is not a function"), so we try the next
+const MP_VERS=['0.10.14','0.10.12','0.10.10','0.10.21'];
+const MP_BASE=v=>'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@'+v;
 const MP_MODEL='https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
 const video=$('#video'),overlay=$('#overlay'),work=$('#work'),wctx=work.getContext('2d',{willReadFrequently:true}),octx=overlay.getContext('2d');
@@ -675,16 +676,23 @@ async function initMP(){
   const retry=S.mpState==='fallback';   // a background retry must not disturb the running (manual-oval) scan
   if(!retry)S.mpState='loading';
   S.mpErr='';
+  S.mpVi=S.mpVi||0;
   try{
-    const mod=await import(MP_BASE+'/vision_bundle.mjs');
-    const fileset=await mod.FilesetResolver.forVisionTasks(MP_BASE+'/wasm');
-    for(const delegate of ['GPU','CPU']){
+    for(let vi=0;vi<MP_VERS.length&&!S.landmarker;vi++){
+      const v=MP_VERS[(S.mpVi+vi)%MP_VERS.length],base=MP_BASE(v);
       try{
-        S.landmarker=await mod.FaceLandmarker.createFromOptions(fileset,{
-          baseOptions:{modelAssetPath:MP_MODEL,delegate},runningMode:'VIDEO',numFaces:1});
-        break;
-      }catch(e){S.landmarker=null;S.mpErr=String(e&&e.message||e).slice(0,60)}
+        const mod=await import(base+'/vision_bundle.mjs');
+        const fileset=await mod.FilesetResolver.forVisionTasks(base+'/wasm');
+        for(const delegate of ['CPU','GPU']){
+          try{
+            S.landmarker=await mod.FaceLandmarker.createFromOptions(fileset,{
+              baseOptions:{modelAssetPath:MP_MODEL,delegate},runningMode:'VIDEO',numFaces:1});
+            break;
+          }catch(e){S.landmarker=null;S.mpErr=String(e&&e.message||e).slice(0,60)}
+        }
+      }catch(e){S.mpErr=String(e&&e.message||e).slice(0,60)}
     }
+    S.mpVi=(S.mpVi+1)%MP_VERS.length;
     if(S.landmarker&&retry&&S.scanning)S.landmarker=null;   // too late to switch mid-scan; the next scan will try again
     S.mpState=S.landmarker?'ready':'fallback';
   }catch(e){S.mpState='fallback';S.mpErr=String(e&&e.message||e).slice(0,60)}
@@ -715,6 +723,15 @@ function updateFace(res,now,vw,vh){
     F.rois=rois;F.fw=fw;F.cx=cx;F.cy=cy;F.present=true;F.seen=now;F.fallback=false;
   }else if(now-F.seen>700){F.present=false;F.rois=[];F.speed=0;F.hist=[]}
 }
+// manual mode: tap your face (on the nose) to put the boxes there
+$('#cam').addEventListener('pointerdown',ev=>{
+  if(S.scanning||!S.running||!S.face.fallback)return;
+  const vw=video.videoWidth,vh=video.videoHeight;if(!vw)return;
+  const r=$('#cam').getBoundingClientRect();
+  let fx=(ev.clientX-r.left)/r.width;const fy=(ev.clientY-r.top)/r.height;
+  if(!$('#cam').classList.contains('rear'))fx=1-fx;   // selfie view is mirrored
+  S.fbTapped=1;S.fbDx=clamp(fx*vw-vw/2,-.4*vw,.4*vw);S.fbDy=clamp(fy*vh-vh*.37-.04*vh,-.3*vh,.35*vh);
+});
 function fallbackFace(now,vw,vh){
   const F=S.face,fw=.5*Math.min(vw,vh*.75),cx=vw/2+(S.fbDx||0),cy=vh*.37+(S.fbDy||0);
   const k=.2*fw;
@@ -838,7 +855,7 @@ function sampleFrame(now,vw,vh){
     if(S.prevSmall&&S.prevSmall.length===g.length){
       const r=gridShift(S.prevSmall,g,SW,x0,y0,x1,y1,R);
       mv=r.mad;
-      if(F.fallback&&mv>1.0&&Math.abs(r.dx)<R&&Math.abs(r.dy)<R){S.fbDx=clamp((S.fbDx||0)+r.dx/k,-.22*vw,.22*vw);S.fbDy=clamp((S.fbDy||0)+r.dy/k,-.2*vh,.2*vh)}
+      if(F.fallback&&mv>1.0&&Math.abs(r.dx)<R&&Math.abs(r.dy)<R){S.fbDx=clamp((S.fbDx||0)+r.dx/k,-.4*vw,.4*vw);S.fbDy=clamp((S.fbDy||0)+r.dy/k,-.3*vh,.35*vh)}
     }
     S.prevSmall=g;
   }
@@ -933,7 +950,12 @@ function drawOverlay(vw,vh){
   octx.lineWidth=3*(window.devicePixelRatio||1);
   octx.setLineDash([10,8]);
   octx.strokeStyle=S.scanning?'rgba(53,224,193,.85)':(good?'rgba(53,224,193,.6)':'rgba(255,255,255,.45)');
-  octx.beginPath();octx.ellipse(W/2,Hh*.37,W*.28,Hh*.29,0,0,Math.PI*2);octx.stroke();
+  // manual mode: the guide oval sits where the boxes are (centre = face position), so boxes always lie inside it
+  const man=S.face.fallback&&S.face.fw;
+  octx.beginPath();
+  if(man)octx.ellipse(S.face.cx*sx,S.face.cy*sy,.56*S.face.fw*sx,.77*S.face.fw*sx,0,0,Math.PI*2);
+  else octx.ellipse(W/2,Hh*.37,W*.28,Hh*.29,0,0,Math.PI*2);
+  octx.stroke();
   octx.setLineDash([]);
   octx.lineWidth=2*(window.devicePixelRatio||1);
   octx.strokeStyle='rgba(124,240,218,.9)';
@@ -963,7 +985,7 @@ function chipState(){
 }
 function updateUi(now){
   const c=chipState();
-  $('#modeNote').textContent=S.mpState==='ready'?'face tracking on':S.mpState==='loading'?'loading face tracking…':'face tracking unavailable: fit your face in the oval'+(S.mpErr?' ('+S.mpErr+')':'');
+  $('#modeNote').textContent=S.mpState==='ready'?'face tracking on':S.mpState==='loading'?'loading face tracking…':'tap your face to place the boxes';
   const set=(id,label,v)=>{const e=$(id);e.className='chip '+v[0];e.innerHTML=label+'<b>'+v[1]+'</b>'};
   set('#cFace','Face',c.face);set('#cLight','Light',c.light);set('#cSteady','Steady',c.steady);set('#cSignal','Signal',c.signal);
   let hint=you('Looks good. Hold steady.','Looks good. Ask them to hold still.');
@@ -993,7 +1015,8 @@ function updateUi(now){
   }
   // hands-free start: begin on its own once face, light and stillness have been OK for 1.5 s
   if(S.running&&!S.scanning){
-    if(S.face.present&&c.all!=='bad'&&S.mpState!=='loading'){
+    if(S.face.fallback&&!S.fbTapped&&S.mpState!=='loading'){S.okSince=0;$('#hint').textContent=you('Tap your face on the screen (on your nose) to place the boxes. The scan starts right after.','Tap their face on the screen (on the nose) to place the boxes. The scan starts right after.')}
+    else if(S.face.present&&c.all!=='bad'&&S.mpState!=='loading'){
       S.okSince=S.okSince||now;
       const left=1.5-(now-S.okSince)/1000;
       if(left<=0){S.okSince=0;beginScan()}
@@ -1035,7 +1058,7 @@ async function startFlow(){
 }
 function resetScan(){
   S.scanning=false;S.okSince=0;S.data=newData();S.gaps=0;S.liveQ=null;S.liveCons=null;S.liveHr=null;S.liveHist=[];S.bgLast=null;S.lastLive=0;
-  S.fbDx=0;S.fbDy=0;S.cleanSec=null;S.expTried=0;S.prevSmall=null;S.hp={ema:null,ring:[]};S.chestBox=null;S.chestPrev=null;S.liveChest=null;S.chestRho=null;
+  S.fbDx=0;S.fbDy=0;S.fbTapped=0;S.cleanSec=null;S.expTried=0;S.prevSmall=null;S.hp={ema:null,ring:[]};S.chestBox=null;S.chestPrev=null;S.liveChest=null;S.chestRho=null;
   $('#prog').style.width='0%';$('#phase').textContent='Ready';$('#clock').textContent='';
   $('#liveHr').innerHTML='--<small>bpm</small>';$('#liveNote').textContent='waiting…';
   $('#goBtn').textContent='Begin 30 s scan';
