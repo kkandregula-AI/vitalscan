@@ -42,6 +42,7 @@ footer{margin-top:18px;text-align:center;font-size:11px;color:#5d7287}
 .pchips{display:flex;flex-wrap:wrap;gap:8px}
 .pchip{appearance:none;border:1px solid var(--line);background:var(--card2);color:var(--text);padding:9px 14px;border-radius:99px;font-size:14px;font-weight:600;cursor:pointer}
 .pchip.on{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#05231d;border-color:transparent}
+body.glow{--bg:#fff2d8;--card:#fffaf0;--card2:#fff;--text:#20303f;--line:#e5d3ad;--muted:#566677}
 .cam.rear video,.cam.rear canvas{transform:none}
 .pchip.add{color:var(--accent);border-style:dashed}
 .seg.on{border-color:var(--accent);color:var(--accent)}
@@ -182,7 +183,7 @@ canvas.wave{width:100%;height:70px;display:block;background:var(--card2);border-
     <button class="btn ghost" id="homeBtn" style="margin-top:10px">Home</button>
   </section>
 
-  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v13</footer>
+  <footer>Designed &amp; Architected by Krishnamurthy Kandregula · Made by Claude<br>NĀḌĪ v15</footer>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -315,6 +316,31 @@ function detectPeaks(x,fs,hrBpm){
     return (i+clamp(d,-1,1))/fs;
   });
 }
+// Beat timing from template matching: every beat is slid against the average beat shape and placed where it fits best
+// (uses the whole waveform, not one noisy peak: roughly 4× less timing jitter). rho = how closely beats match that shape
+// (1 = identical); only a high rho means the beat times, and so HRV, can be trusted.
+function refineBeats(sig,times,fs){
+  const half=Math.round(0.35*fs),n=sig.length;
+  let ts=times.filter(t=>{const i=Math.round(t*fs);return i>half+3&&i<n-half-4});
+  if(ts.length<8)return {times:ts,rho:0};
+  const build=()=>{const tm=new Float64Array(2*half+1);let c=0;for(const t of ts){const i=Math.round(t*fs);if(i>half&&i<n-half-1){c++;for(let k=-half;k<=half;k++)tm[k+half]+=sig[i+k]}}for(let k=0;k<tm.length;k++)tm[k]/=c||1;return tm};
+  let tm=build();
+  for(let pass=0;pass<2;pass++){
+    const out=[];
+    for(const t of ts){
+      const c=Math.round(t*fs);if(c<half+4||c>n-half-5)continue;
+      const cc=[];for(let lag=-3;lag<=3;lag++){let s=0;for(let k=-half;k<=half;k++)s+=tm[k+half]*sig[c+lag+k];cc.push(s)}
+      let b=0;for(let i=1;i<7;i++)if(cc[i]>cc[b])b=i;
+      let d=0;if(b>0&&b<6){const y0=cc[b-1],y1=cc[b],y2=cc[b+1],den=y0-2*y1+y2;d=den?0.5*(y0-y2)/den:0}
+      out.push((c+(b-3)+clamp(d,-1,1))/fs);
+    }
+    if(out.length<8)return {times:ts,rho:0};
+    ts=out;tm=build();
+  }
+  let rs=0,rn=0;
+  for(const t of ts){const i=Math.round(t*fs);if(i<=half||i>=n-half-1)continue;let a=0,b=0,c=0;for(let k=-half;k<=half;k++){a+=tm[k+half]*sig[i+k];b+=tm[k+half]**2;c+=sig[i+k]**2}rs+=a/Math.sqrt(b*c+1e-12);rn++}
+  return {times:ts,rho:rn?rs/rn:0};
+}
 function cleanIBI(times){
   const ibi=[];
   for(let i=1;i<times.length;i++)ibi.push((times[i]-times[i-1])*1000);
@@ -357,12 +383,31 @@ function clipOutliers(x,k){
 // Welch-style HR: average the (power-normalised) spectra of overlapping 10 s windows, so a loud motion burst
 // can't dominate; also report how many windows individually agree on the rate (noise never agrees with itself)
 // `notch`: frequencies (Hz) to ignore, i.e. rhythms that also show up in the background (lighting flicker)
+// Head-movement mask. mot = per-frame picture-change of the face area (≈0.3 when still, several when the head moves).
+// Returns 1 for clean samples, 0 for moving ones (padded 0.5 s each side, because the filters smear a jerk into the next second).
+function motionMask(mot,t,n){
+  const m=new Float64Array(n).fill(1);
+  if(!mot||mot.length<FS*4||!t||t.length!==mot.length)return {m,cleanFrac:1,cleanSec:n/FS};
+  const med=median(mot),thr=Math.max(1.2,3.5*med);
+  const raw=new Float64Array(n);
+  const t0=t[0],T=(t[t.length-1]-t0)/1000;
+  for(let k=0;k<mot.length;k++){if(mot[k]>thr){const i=Math.round((t[k]-t0)/1000*(n-1)/Math.max(T,1e-6));if(i>=0&&i<n)raw[i]=1}}
+  const pad=Math.round(.5*FS);let bad=0;
+  for(let i=0;i<n;i++){let b=0;for(let j=Math.max(0,i-pad);j<=Math.min(n-1,i+pad)&&!b;j++)if(raw[j])b=1;if(b){m[i]=0;bad++}}
+  return {m,cleanFrac:1-bad/n,cleanSec:(n-bad)/FS};
+}
 const inNotch=(f,notch)=>{for(const n of notch)if(Math.abs(f-n)<0.12)return true;return false};
-function welchHR(x,fs,notch){
+function welchHR(x,fs,notch,mk){
   const W=Math.round(10*fs),hop=Math.round(fs),n=x.length;
   if(n<W+hop){const pk=peakInfo(spectrum(x,fs,0.7,3.5,0.01),n/fs,3.5);return {f:pk.f,snrDb:pk.snrDb,cons:0.5}}
   let avg=null;const peaks=[];
+  // windows that are mostly head movement are left out (if enough clean ones remain)
+  let use=null;
+  if(mk){let c=0,tot=0;use=[];for(let s=0;s+W<=n;s+=hop){let g=0;for(let i=s;i<s+W;i++)g+=mk[i];tot++;const ok=g/W>=.7;use.push(ok);if(ok)c++}
+    if(c<3)use=null}
+  let wi=-1;
   for(let s=0;s+W<=n;s+=hop){
+    wi++;if(use&&!use[wi])continue;
     const sp=spectrum(x.slice(s,s+W),fs,0.7,3.5,0.01);
     if(notch&&notch.length)for(let i=0;i<sp.P.length;i++)if(inNotch(sp.f[i],notch))sp.P[i]=0;
     let tot=0,k=0;
@@ -451,6 +496,20 @@ function respPeakStable(x,fs,lo,hi){
 // P, C = two consecutive greyscale images of the strip (w×h, row-major). 2-D Lucas–Kanade for pure vertical motion:
 // if C(x,y)=P(x,y-d) then d≈-Σ Iy·It / Σ Iy². Returns d (rows moved DOWN, a fraction of a row) and rho = how much
 // real picture detail the strip has compared with what camera noise alone would give (rho≈1 means a blank area).
+// How far did the picture content inside the box [x0,x1)×[y0,y1) move between two small greyscale frames P → C (w px wide)?
+// Tries whole-cell shifts up to ±R and refines to a fraction of a cell. Returns {dx,dy,mad,ok}; mad = mean abs change with no shift (the "motion" amount).
+function gridShift(P,C,w,x0,y0,x1,y1,R){
+  const sad=(sx,sy)=>{let s=0,n=0;for(let y=y0+R;y<y1-R;y++)for(let x=x0+R;x<x1-R;x++){s+=Math.abs(C[y*w+x]-P[(y-sy)*w+(x-sx)]);n++}return n?s/n:1e9};
+  const m=2*R+1,cost=[];let b=0,bx=0,by=0,bv=1e18;
+  for(let sy=-R;sy<=R;sy++)for(let sx=-R;sx<=R;sx++){const c=sad(sx,sy);cost.push(c);if(c<bv){bv=c;bx=sx;by=sy}}
+  const at=(sx,sy)=>cost[(sy+R)*m+(sx+R)];
+  const par=(a,b2,c)=>{const den=a-2*b2+c;return den>1e-9?clamp(0.5*(a-c)/den,-.5,.5):0};
+  let fx=0,fy=0;
+  if(Math.abs(bx)<R)fx=par(at(bx-1,by),bv,at(bx+1,by));
+  if(Math.abs(by)<R)fy=par(at(bx,by-1),bv,at(bx,by+1));
+  const zero=at(0,0);
+  return {dx:bx+fx,dy:by+fy,mad:zero,ok:bv<zero*0.97&&bv<1e8};
+}
 function chestStep(P,C,w,h){
   const n=w*h;let mP=0,mC=0;
   for(let i=0;i<n;i++){mP+=P[i];mC+=C[i]}
@@ -487,11 +546,15 @@ function analyze(S,opts={}){
   const G=resample(S.t,S.g,FS);
   const T=G.length/FS;
   const notch=bgArtifacts(S);
+  // head movement: leave moving stretches out of the pulse (they would otherwise drown it) and tell the caller how much clean data there is
+  const MK=motionMask(S.mot,S.t,G.length),mk=MK.m;
+  const mkSoft=new Float64Array(mk.length);{const w=Math.round(.25*FS);let acc=0;for(let i=0;i<mk.length;i++){acc+=mk[i];if(i>=w)acc-=mk[i-w];mkSoft[i]=acc/Math.min(i+1,w)}}
+  const hide=p=>{for(let i=0;i<p.length&&i<mkSoft.length;i++)p[i]*=mkSoft[i];return p};
   // one pulse per face region (forehead, left cheek, right cheek); a shadowed cheek or glasses glare shouldn't sink the others
   const chans=S.rois&&S.rois.length?S.rois:[{r:S.r,g:S.g,b:S.b}];
   const per=chans.map(c=>{
-    const p=bandpass(detrend(clipOutliers(pos(resample(S.t,c.r,FS),resample(S.t,c.g,FS),resample(S.t,c.b,FS),FS),3)),FS,0.7,3.5);
-    return {p,info:welchHR(p,FS,notch)};
+    const p=hide(bandpass(detrend(clipOutliers(pos(resample(S.t,c.r,FS),resample(S.t,c.g,FS),resample(S.t,c.b,FS),FS),3)),FS,0.7,3.5));
+    return {p,info:welchHR(p,FS,notch,mk)};
   });
   let pulse,info;
   if(per.length===1){pulse=per[0].p;info=per[0].info}
@@ -501,13 +564,14 @@ function analyze(S,opts={}){
       const sd=stdev(e.p)||1,w=Math.max(0.02,Math.pow(10,e.info.snrDb/10));
       for(let i=0;i<pulse.length;i++)pulse[i]+=w*e.p[i]/sd;
     }
-    info=welchHR(pulse,FS,notch);
+    info=welchHR(pulse,FS,notch,mk);
     // fusion should never be worse than the best single region
     const best=per.reduce((a,b)=>qualityOf(b.info)>qualityOf(a.info)?b:a);
     if(qualityOf(best.info)>qualityOf(info)){pulse=best.p;info=best.info}
   }
   const hr=info.f*60;
-  const out={hr,snrDb:info.snrDb,cons:info.cons,quality:qualityOf(info),dur,pulse,fs:FS,roiQ:per.map(e=>qualityOf(e.info))};
+  // little clean data left after head movement = less trust in the score
+  const out={hr,snrDb:info.snrDb,cons:info.cons,quality:Math.min(qualityOf(info),Math.round(30+70*clamp((MK.cleanSec-12)/14,0,1))),dur,pulse,fs:FS,roiQ:per.map(e=>qualityOf(e.info)),cleanSec:MK.cleanSec,cleanFrac:MK.cleanFrac};
   // was the strongest rhythm on the face actually a background artefact? report it, and we already ignored it
   out.flicker=null;
   if(notch.length){
@@ -517,7 +581,9 @@ function analyze(S,opts={}){
   if(opts.fast)return out;
 
   // beats + HRV
-  const times=detectPeaks(pulse,FS,hr);
+  const rb=refineBeats(pulse,detectPeaks(pulse,FS,hr).filter(tm=>{const i=Math.round(tm*FS);return i>=0&&i<mk.length&&mk[i]>0}),FS);
+  const times=rb.times.filter(tm=>{const i=Math.round(tm*FS);return i>=0&&i<mk.length&&mk[i]>0});
+  out.beatRho=rb.rho;
   out.peakTimes=times;
   const {ibi,ok}=cleanIBI(times);
   out.beats=times.length;
@@ -526,8 +592,15 @@ function analyze(S,opts={}){
     out.hrv=h;
     out.hrFromPeaks=60000/h.meanIbi;
     const okFrac=ok.filter(Boolean).length/Math.max(ok.length,1);
-    out.hrvReliable=Math.abs(out.hrFromPeaks-hr)<5&&out.quality>=70&&okFrac>=.9;
-    out.stress=Math.round(clamp(100*(1-(Math.log(h.rmssd)-Math.log(15))/(Math.log(90)-Math.log(15))),0,100));
+    const agree=Math.abs(out.hrFromPeaks-hr)<6&&okFrac>=.75&&h.n>=20;
+    out.hrvReliable=agree&&out.quality>=50&&rb.rho>=.92;
+    out.hrvRough=agree&&out.quality>=40&&rb.rho>=.85;
+    // Camera timing noise makes RMSSD read high; in simulation the excess grows as exp(3.1·(1−rho)). Undo that and give a range that widens as the beats get noisier.
+    const infl=Math.exp(3.1*(1-clamp(rb.rho,0,1))),adj=h.rmssd/infl,sp=clamp(.3+1.2*(1-rb.rho),.3,.65);
+    out.hrvAdj=adj;out.hrvLo=adj*(1-sp);out.hrvHi=adj*(1+sp);
+    out.hrvConf=Math.round(clamp((rb.rho-.62)/.33,0,1)*100*(okFrac>=.75?1:.6)*clamp(out.cleanFrac/.9,.5,1));
+    out.hrvShow=Math.abs(out.hrFromPeaks-hr)<8&&h.n>=15&&rb.rho>=.62;
+    out.stress=Math.round(clamp(100*(1-(Math.log(Math.max(adj,5))-Math.log(15))/(Math.log(90)-Math.log(15))),0,100));
   }
 
   // respiration: three independent looks.
@@ -587,13 +660,14 @@ const MP_BASE='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@'+MP_VER;
 const MP_MODEL='https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
 const video=$('#video'),overlay=$('#overlay'),work=$('#work'),wctx=work.getContext('2d',{willReadFrequently:true}),octx=overlay.getContext('2d');
+const small=document.createElement('canvas'),sctx=small.getContext('2d',{willReadFrequently:true});
 const S={facing:(()=>{try{return localStorage.getItem('nadi.cam')==='environment'?'environment':'user'}catch(e){return'user'}})(),torchOn:false,torchOK:false,torchUser:null,running:false,scanning:false,stream:null,landmarker:null,mpState:'idle',frame:0,lastVT:-1,
   face:{present:false,rois:[],fw:0,cx:0,cy:0,speed:0,seen:0,fallback:false},
   bri:128,sat:0,tStart:0,data:newData(),gaps:0,mbad:0,mtot:0,lastT:0,
   hp:{ema:null,ring:[]},liveQ:null,liveCons:null,liveHr:null,lastLive:0,lastUi:0,result:null};
-function newData(){return {t:[],r:[],g:[],b:[],bg:[],chestV:[],chestOk:[],chestBoxed:false,rois:[0,1,2].map(()=>({r:[],g:[],b:[]}))}}
+function newData(){return {t:[],r:[],g:[],b:[],bg:[],mot:[],chestV:[],chestOk:[],chestBoxed:false,rois:[0,1,2].map(()=>({r:[],g:[],b:[]}))}}
 
-function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id===id));window.scrollTo(0,0)}
+function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id===id));if(id!=='scan')document.body.classList.remove('glow');window.scrollTo(0,0)}
 
 /* ───────────── MediaPipe face landmarks (on-device) ───────────── */
 async function initMP(){
@@ -642,7 +716,7 @@ function updateFace(res,now,vw,vh){
   }else if(now-F.seen>700){F.present=false;F.rois=[];F.speed=0;F.hist=[]}
 }
 function fallbackFace(now,vw,vh){
-  const F=S.face,fw=.5*Math.min(vw,vh*.75),cx=vw/2,cy=vh*.37;
+  const F=S.face,fw=.5*Math.min(vw,vh*.75),cx=vw/2+(S.fbDx||0),cy=vh*.37+(S.fbDy||0);
   const k=.2*fw;
   F.rois=[{cx,cy:cy-.45*fw,w:.5*fw,h:.17*fw},{cx:cx-.28*fw,cy:cy+.12*fw,w:k,h:k},{cx:cx+.28*fw,cy:cy+.12*fw,w:k,h:k}];
   F.fw=fw;F.cx=cx;F.cy=cy;F.present=true;F.seen=now;F.fallback=true;F.speed=0;
@@ -750,11 +824,30 @@ function sampleFrame(now,vw,vh){
   if(!F.present||!F.sm||!F.sm.length)return;
   const sc=320/vw;work.width=320;work.height=Math.round(vh*sc);
   wctx.drawImage(video,0,0,work.width,work.height);
+  // picture change in the face area (= head movement) and, in manual mode, face following, from a tiny greyscale copy of the frame
+  let mv=0;
+  {
+    const SW=64,SH=Math.max(16,Math.round(vh*SW/vw));
+    if(small.width!==SW||small.height!==SH){small.width=SW;small.height=SH;S.prevSmall=null}
+    sctx.drawImage(video,0,0,SW,SH);
+    const px=sctx.getImageData(0,0,SW,SH).data,g=new Float32Array(SW*SH);
+    for(let i=0,j=0;i<g.length;i++,j+=4)g[i]=px[j]*.3+px[j+1]*.59+px[j+2]*.11;
+    const k=SW/vw,R=3;
+    const x0=clamp(Math.round((F.cx-.7*F.fw)*k),R,SW-R-8),x1=clamp(Math.round((F.cx+.7*F.fw)*k),x0+8,SW-R);
+    const y0=clamp(Math.round((F.cy-.8*F.fw)*k),R,SH-R-8),y1=clamp(Math.round((F.cy+.8*F.fw)*k),y0+8,SH-R);
+    if(S.prevSmall&&S.prevSmall.length===g.length){
+      const r=gridShift(S.prevSmall,g,SW,x0,y0,x1,y1,R);
+      mv=r.mad;
+      if(F.fallback&&mv>1.0&&Math.abs(r.dx)<R&&Math.abs(r.dy)<R){S.fbDx=clamp((S.fbDx||0)+r.dx/k,-.22*vw,.22*vw);S.fbDy=clamp((S.fbDy||0)+r.dy/k,-.2*vh,.2*vh)}
+    }
+    S.prevSmall=g;
+  }
   let tr=0,tg=0,tb=0,tn=0,ar=0,ag=0,ab=0,an=0,sat=0;
   const per=[];
   for(const q of F.sm){
-    const x=Math.max(0,Math.round((q.cx-q.w/2)*sc)),y=Math.max(0,Math.round((q.cy-q.h/2)*sc));
-    const w=Math.min(work.width-x,Math.round(q.w*sc)),h=Math.min(work.height-y,Math.round(q.h*sc));
+    const gr=S.bri<70?1.35:1;   // dim light = noisier pixels: average over a larger patch
+    const x=Math.max(0,Math.round((q.cx-q.w*gr/2)*sc)),y=Math.max(0,Math.round((q.cy-q.h*gr/2)*sc));
+    const w=Math.min(work.width-x,Math.round(q.w*gr*sc)),h=Math.min(work.height-y,Math.round(q.h*gr*sc));
     if(w<2||h<2)return;
     const d=wctx.getImageData(x,y,w,h).data;
     let sr=0,sg=0,sb=0,n=0,pr=0,pg=0,pb=0,pn=0;
@@ -810,12 +903,13 @@ function sampleFrame(now,vw,vh){
       per.forEach((v,i)=>{D.rois[i].r.push(v[0]);D.rois[i].g.push(v[1]);D.rois[i].b.push(v[2])});
       if(bgv!=null)S.bgLast=bgv;
       D.bg.push(S.bgLast||0);   // 0 = "no background available yet"; analysis ignores the reference if too many are missing
-      D.chestV.push(dv);D.chestOk.push(cok);
+      D.chestV.push(dv);D.chestOk.push(cok);D.mot.push(mv);
       S.mtot++;if(F.speed>=.08)S.mbad++;
       if(now-S.lastLive>1000&&D.t.length>FS*12){
         S.lastLive=now;
+        S.cleanSec=motionMask(D.mot,D.t,Math.round((D.t[D.t.length-1]-D.t[0])/1000*FS)+1).cleanSec;   // seconds of data not spoiled by head movement
         const cut=now-18000;let k=0;while(k<D.t.length&&D.t[k]<cut)k++;
-        const a=analyze({t:D.t.slice(k),r:D.r.slice(k),g:D.g.slice(k),b:D.b.slice(k),bg:D.bg.slice(k),
+        const a=analyze({t:D.t.slice(k),r:D.r.slice(k),g:D.g.slice(k),b:D.b.slice(k),bg:D.bg.slice(k),mot:D.mot.slice(k),
           rois:D.rois.map(c=>({r:c.r.slice(k),g:c.g.slice(k),b:c.b.slice(k)}))},{fast:true});
         if(a){
           S.liveQ=a.quality;S.liveCons=a.cons;
@@ -827,7 +921,7 @@ function sampleFrame(now,vw,vh){
     }
     // after 30 s keep going while the pulse is weak (up to 60 s), or while a tracked breathing signal isn't convincing yet (up to 45 s)
     const m=el-WARM,chestUsable=!!S.chestBox&&S.chestRho!=null&&S.chestRho>=CH_RHO;   // no point waiting longer if there is nothing to track
-    if(m>=SCAN_MAX||(m>=SCAN_S&&S.liveQ!=null&&S.liveQ>=60&&(!chestUsable||solid(S.liveChest)||m>=RESP_MAX)))finishScan();
+    if(m>=SCAN_MAX||(m>=SCAN_S&&(S.cleanSec==null||S.cleanSec>=.85*SCAN_S)&&S.liveQ!=null&&S.liveQ>=60&&(!chestUsable||solid(S.liveChest)||m>=RESP_MAX)))finishScan();
   }
 }
 
@@ -859,7 +953,7 @@ function drawLiveWave(){
 function chipState(){
   const F=S.face,c={};
   c.face=F.fallback?['warn','Manual']:F.present?['ok','Found']:['bad','Not found'];
-  c.light=S.bri<55?['bad','Too dark']:S.bri<80?['warn','Dim']:(S.bri>225||S.sat>.15)?['bad','Too bright']:['ok','Good'];
+  c.light=S.bri<35?['bad','Too dark']:S.bri<60?['warn','Dim']:(S.bri>225||S.sat>.15)?['bad','Too bright']:['ok','Good'];
   c.steady=F.fallback?['warn','n/a']:F.speed>=.08?['bad','Moving']:F.speed>=.04?['warn','Slight']:['ok','Still'];
   if(S.liveQ==null)c.signal=['','Measuring'];
   else c.signal=S.liveQ>=60?['ok','Strong']:S.liveQ>=35?['warn','Fair']:['bad','Weak'];
@@ -882,8 +976,15 @@ function updateUi(now){
   $('#hint').textContent=hint;
   // camera light: switch on by itself in dim light before the scan (unless the person turned it off), off again if it glares
   if(S.torchOK&&!S.scanning&&S.frame>20){
-    if(!S.torchOn&&S.torchUser!==false&&S.bri<80&&!S.torchBusy){S.torchBusy=1;setTorch(true).finally(()=>{S.torchBusy=0;S.bri=Math.max(S.bri,80)})}
+    if(!S.torchOn&&S.torchUser!==false&&S.bri<70&&!S.torchBusy){S.torchBusy=1;setTorch(true).finally(()=>{S.torchBusy=0;S.bri=Math.max(S.bri,80)})}
     else if(S.torchOn&&S.torchUser!==true&&S.bri>205&&!S.torchBusy){S.torchBusy=1;setTorch(false).finally(()=>{S.torchBusy=0})}
+  }
+  if(!S.scanning&&S.running&&S.frame>20){
+    const dim=S.bri<60,trk=S.stream&&S.stream.getVideoTracks()[0];
+    // raise the camera's exposure a little in dim light (where the phone allows it)
+    if(trk&&dim&&!S.expTried){S.expTried=1;try{const cap=trk.getCapabilities().exposureCompensation;if(cap)trk.applyConstraints({advanced:[{exposureCompensation:Math.min(cap.max,cap.min+(cap.max-cap.min)*.8)}]}).catch(()=>{})}catch(e){}}
+    // front camera has no light: brighten the screen so it lights the face
+    if(dim&&!S.torchOK&&S.facing==='user'&&!document.body.classList.contains('glow')){document.body.classList.add('glow');S.glowOn=1}
   }
   if(!S.scanning){
     const cb=chestBoxFor(S.face,video.videoWidth,video.videoHeight),plain=S.chestRho!=null&&S.chestRho<CH_RHO;
@@ -905,7 +1006,7 @@ function updateUi(now){
     if(el<WARM){$('#phase').textContent='Settling camera…';$('#clock').textContent='';$('#prog').style.width='0%'}
     else{
       const m=el-WARM,ext=m>SCAN_S,pulseOk=S.liveQ!=null&&S.liveQ>=60,lim=ext?(pulseOk?RESP_MAX:SCAN_MAX):SCAN_S;
-      $('#phase').textContent=ext?(pulseOk?'Checking breathing a little longer':'Signal still weak: measuring a bit longer'):'Measuring';
+      $('#phase').textContent=ext?(S.cleanSec!=null&&S.cleanSec<.85*SCAN_S?'You moved: measuring a bit longer, keep still':pulseOk?'Checking breathing a little longer':'Signal still weak: measuring a bit longer'):'Measuring';
       $('#clock').textContent=Math.max(0,Math.ceil(lim-m))+' s';
       $('#prog').style.width=clamp(ext?(m-SCAN_S)/Math.max(1,lim-SCAN_S)*100:m/SCAN_S*100,0,100)+'%';
     }
@@ -934,7 +1035,7 @@ async function startFlow(){
 }
 function resetScan(){
   S.scanning=false;S.okSince=0;S.data=newData();S.gaps=0;S.liveQ=null;S.liveCons=null;S.liveHr=null;S.liveHist=[];S.bgLast=null;S.lastLive=0;
-  S.hp={ema:null,ring:[]};S.chestBox=null;S.chestPrev=null;S.liveChest=null;S.chestRho=null;
+  S.fbDx=0;S.fbDy=0;S.cleanSec=null;S.expTried=0;S.prevSmall=null;S.hp={ema:null,ring:[]};S.chestBox=null;S.chestPrev=null;S.liveChest=null;S.chestRho=null;
   $('#prog').style.width='0%';$('#phase').textContent='Ready';$('#clock').textContent='';
   $('#liveHr').innerHTML='--<small>bpm</small>';$('#liveNote').textContent='waiting…';
   $('#goBtn').textContent='Begin 30 s scan';
@@ -953,7 +1054,7 @@ function finishScan(){
   S.scanning=false;
   const D=S.data,a=analyze(D);
   // HRV is the most motion-sensitive number: don't show it if the face moved for >10% of the scan
-  if(a&&S.mtot&&S.mbad/S.mtot>.1)a.hrvReliable=false;
+  if(a&&a.cleanFrac<.65){a.hrvReliable=false;a.hrvRough=false;a.hrvConf=Math.min(a.hrvConf||0,30)}   // too much of the scan was head movement
   const total=Math.max(SCAN_S,D.t.length?(S.lastT-D.t[0])/1000:SCAN_S),coverage=a?clamp(1-S.gaps/total,0,1):0;
   closeCamera();
   S.result={a,coverage,at:Date.now(),person:S.person||ME};
@@ -994,7 +1095,7 @@ function renderResult(){
   }
   $('#shareBtn').style.display='';
   const hp=pillFor(a.quality),rp=pillFor(a.rrQuality);
-  const rrOk=a.rrQuality>=40;
+  const rrOk=a.rrQuality>=40,rrGuess=!rrOk&&a.rr>=6&&a.rr<=35&&a.rrSrc&&/unconfirmed/.test(a.rrSrc);
   const P=S.result.person||ME,N=NORMS[P.grp]||NORMS.adult;
   const d=a.rrDetail||{},parts=[];
   if(d.movement!=null)parts.push('shoulders '+Math.round(d.movement));
@@ -1003,27 +1104,25 @@ function renderResult(){
   const rrNote=(rrOk?'':({'out of view':you('Shoulders were not in view. Sit back a little. ','Shoulders were not in view. Have them sit back a little. '),'too plain':'The area below the chin looked too plain to track (plain top, flat light). A top with a pattern or a visible collar helps. ','short':'Not enough shoulder data. ','none':'Not enough shoulder data. '}[a.chestState]||'Methods did not agree. '))+(parts.length?'Readings: '+parts.join(' · ')+' /min':'')
     +(!rrOk&&d.movementPeaks&&d.movementPeaks.length?'. Shoulder peaks: '+d.movementPeaks.map(p=>Math.round(p.rr)+' ('+Math.round(p.snrDb)+' dB)').join(', '):'');
   let hrvCard='';
-  if(a.hrv&&a.hrvReliable){
-    const sl=stressLabel(a.stress);
-    hrvCard=`<div class="stat"><div class="k">HRV · RMSSD</div><div class="v">${Math.round(a.hrv.rmssd)}<small>ms</small></div>
-      <div class="s">SDNN ${Math.round(a.hrv.sdnn)} ms · ${a.hrv.n} beats</div><span class="pill warn">Indicative</span></div>
-      <div class="stat"><div class="k">Stress index</div><div class="v">${a.stress}<small>/100</small></div>
-      <div class="s">${sl}</div><span class="pill warn">Indicative</span></div>
-      <div class="stat wide"><div class="k">Autonomic balance</div><div class="gauge"><i style="left:calc(${a.stress}% - 2px)"></i></div>
-      <div class="s" style="display:flex;justify-content:space-between"><span>Relaxed</span><span>Elevated</span></div></div>`;
-  }else if(a.hrv&&Math.abs(a.hrFromPeaks-a.hr)<5&&a.quality>=50){
-    hrvCard=`<div class="stat wide"><div class="k">HRV · RMSSD (rough)</div><div class="v">${Math.round(a.hrv.rmssd)}<small>ms</small></div>
-      <div class="s">Camera noise tends to make this read high. Use it to compare your own scans, not as an absolute value.</div><span class="pill warn">Rough</span></div>`;
+  if(a.hrv&&a.hrvShow){
+    const hp=pillFor(a.hrvConf),lo=Math.round(a.hrvLo),hi=Math.round(a.hrvHi),sl=stressLabel(a.stress);
+    hrvCard=`<div class="stat wide"><div class="k">HRV · RMSSD</div><div class="v">${Math.round(a.hrvAdj)}<small>ms (likely ${lo}–${hi})</small></div>
+      <div class="s">Adjusted for camera noise (raw reading ${Math.round(a.hrv.rmssd)} ms) · ${a.hrv.n} beats · beats match ${Math.round(a.beatRho*100)}%</div>
+      <span class="pill ${hp[0]}">${hp[1]} · ${a.hrvConf}%</span>
+      ${a.hrvConf<40?'<div class="s" style="color:var(--warn);margin-top:6px">Beat shape was noisy (dim light or movement). Treat as a rough guide and compare only with your own scans.</div>':''}</div>
+      ${a.hrvConf>=40?`<div class="stat"><div class="k">Stress index</div><div class="v">${a.stress}<small>/100</small></div><div class="s">${sl}</div><span class="pill ${hp[0]}">${hp[1]}</span></div>
+      <div class="stat"><div class="k">Autonomic balance</div><div class="gauge"><i style="left:calc(${a.stress}% - 2px)"></i></div>
+      <div class="s" style="display:flex;justify-content:space-between"><span>Relaxed</span><span>Elevated</span></div></div>`:''}`;
   }else{
-    hrvCard=`<div class="stat wide"><div class="k">HRV &amp; stress</div><div class="s" style="margin-top:6px">Beat timing wasn't clean enough for a trustworthy HRV. Retry with steadier, brighter conditions.</div></div>`;
+    hrvCard=`<div class="stat wide"><div class="k">HRV &amp; stress</div><div class="s" style="margin-top:6px">Beat timing wasn't clean enough for any HRV estimate. Steadier hold, brighter light and a longer scan help.</div><span class="pill bad">Low confidence · not shown</span></div>`;
   }
   el.innerHTML=`${P.id!=='me'?`<div class="note" style="margin:0 0 10px;font-size:13px">Scan for <b style="color:var(--text)">${esc(P.name)}</b></div>`:''}<div class="grid">
     <div class="stat"><div class="k">Heart rate</div><div class="v">${Math.round(a.hr)}<small>bpm</small></div>
       <div class="s">${N.label}: ${N.hr}</div><span class="pill ${hp[0]}">${hp[1]}</span>
       ${a.quality<35?'<div class="s" style="color:var(--warn);margin-top:6px">Rough estimate. Rescan with the phone propped steady.</div>':''}
       ${a.flicker?`<div class="s" style="color:var(--warn);margin-top:6px">Ignored a steady ${a.flicker} bpm rhythm that also shows in the background: lighting flicker, not your pulse.</div>`:''}</div>
-    <div class="stat"><div class="k">Respiration</div><div class="v">${rrOk?Math.round(a.rr):'--'}<small>/min</small></div>
-      <div class="s">${N.label}: ${N.rr}</div><span class="pill ${rrOk?rp[0]:'bad'}">${rrOk?rp[1]:'Not confirmed'}</span>
+    <div class="stat"><div class="k">Respiration</div><div class="v" ${!rrOk&&rrGuess?'style="opacity:.55"':''}>${rrOk||rrGuess?Math.round(a.rr):'--'}<small>/min${!rrOk&&rrGuess?' · guess':''}</small></div>
+      <div class="s">${N.label}: ${N.rr}</div><span class="pill ${rrOk?rp[0]:'bad'}">${rrOk?rp[1]:rrGuess?'Low confidence · best guess':'Not confirmed'}</span>
       ${rrNote?`<div class="s" style="margin-top:6px">${rrNote}</div>`:''}</div>
     ${hrvCard}
     <div class="stat wide"><div class="k">Pulse waveform · last 10 s</div><canvas class="wave" id="resWave" style="margin-top:8px"></canvas>
@@ -1040,7 +1139,7 @@ function renderResult(){
   drawWave($('#resWave'),a.pulse,a.peakTimes,a.fs);
   if(a.chestTrace&&$('#resChest'))drawWave($('#resChest'),a.chestTrace,null,a.fs,30);
   S.result.summary={t:Date.now(),hr:Math.round(a.hr),rr:rrOk?Math.round(a.rr):null,
-    rmssd:a.hrv&&a.hrvReliable?Math.round(a.hrv.rmssd):null,stress:a.hrv&&a.hrvReliable?a.stress:null,q:a.quality,
+    rmssd:a.hrv&&a.hrvShow&&a.hrvConf>=40?Math.round(a.hrvAdj):null,stress:a.hrv&&a.hrvShow&&a.hrvConf>=40?a.stress:null,q:a.quality,
     p:P.id,rrRaw:Math.round(a.rr),rrSrc:a.rrSrc};
   saveHistory(S.result.summary);
   $('#refRr').oninput=e=>{
